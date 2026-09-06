@@ -1,0 +1,17 @@
+import { initializeApp } from "firebase/app";
+import { getFirestore } from "firebase/firestore";
+import { getAuth } from "firebase/auth"; //  ADD THIS
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCXrCEHh-J0IHnyBVJHLabI99aHyM-UOIk",
+  authDomain: "digiqr-menu.firebaseapp.com",
+  projectId: "digiqr-menu",
+  storageBucket: "digiqr-menu.firebasestorage.app",
+  messagingSenderId: "477389247829",
+  appId: "1:477389247829:web:2e6ba29143cad3e17f4bdc",
+  measurementId: "G-NV7C5TGP9P"
+};
+
+const app = initializeApp(firebaseConfig);
+export const db = getFirestore(app);
+export const auth = getAuth(app); //  ADD THIS
