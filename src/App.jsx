@@ -133,7 +133,17 @@ export default function App() {
         if (data.status === "pending" || data.status === "preparing") activeCount++;
         
         const orderDateObj = data.created_at ? data.created_at.toDate() : new Date();
-        if (data.table_number === parseInt(tableNumber) && orderDateObj.toDateString() === todayString && data.status !== "paid") {
+
+        // 🚨 NEW: If this specific user's order is rejected, kick them out to the start screen
+        if (data.status === "rejected" && data.meal_session_id === sessionStorage.getItem("meal_session_id")) {
+          sessionStorage.removeItem("customer_table_session");
+          sessionStorage.removeItem("meal_session_id");
+          sessionStorage.removeItem("cart");
+          window.location.href = "/Digi-QR-Menu/";
+        }
+
+        // 🚨 NEW: Filter out "rejected" orders so they don't show up on the table's bill
+        if (data.table_number === parseInt(tableNumber) && orderDateObj.toDateString() === todayString && data.status !== "paid" && data.status !== "rejected") {
           myTableOrders.push({ id: doc.id, ...data });
         }
       });
