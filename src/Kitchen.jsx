@@ -50,7 +50,7 @@ export default function Kitchen() {
         if (data.status === "pending" || data.status === "preparing") {
           active.push({ id: document.id, ...data });
         }
-        if (data.status !== "paid" && orderDateObj.toDateString() === todayString) {
+        if (data.status !== "paid" && data.status !== "rejected" && orderDateObj.toDateString() === todayString) {
           unpaid.push({ id: document.id, ...data });
           activeTableSet.add(data.table_number);
         }
@@ -117,6 +117,22 @@ export default function Kitchen() {
     const batch = writeBatch(db);
     pendingIds.forEach((id) => batch.update(doc(db, "orders", id), { status: "preparing" }));
     await batch.commit();
+  };
+
+  // --- NEW: REJECT GHOST ORDERS ---
+  const rejectNewItems = async (pendingIds) => {
+    const confirmReject = window.confirm("Are you sure you want to REJECT this new order? (Table is empty?)");
+    
+    if (confirmReject) {
+      try {
+        const batch = writeBatch(db);
+        pendingIds.forEach((id) => batch.update(doc(db, "orders", id), { status: "rejected" }));
+        await batch.commit();
+      } catch (error) {
+        console.error("Error rejecting order: ", error);
+        alert("Could not reject the order. Check your connection.");
+      }
+    }
   };
 
   const markTableServed = async (allIds) => {
@@ -242,7 +258,10 @@ export default function Kitchen() {
                   )}
 
                   {hasNewItems ? (
-                    <button onClick={() => acceptNewItems(tableGroup.pendingIds)} style={{ width: "100%", padding: "15px", backgroundColor: "#F59E0B", color: "white", border: "none", borderRadius: "10px", fontSize: "16px", cursor: "pointer", fontWeight: "bold" }}>👨‍🍳 Accept New Items</button>
+                    <div style={{ display: "flex", gap: "10px" }}>
+                      <button onClick={() => acceptNewItems(tableGroup.pendingIds)} style={{ flex: 1, padding: "15px", backgroundColor: "#F59E0B", color: "white", border: "none", borderRadius: "10px", fontSize: "15px", cursor: "pointer", fontWeight: "bold" }}>👨‍🍳 Accept</button>
+                      <button onClick={() => rejectNewItems(tableGroup.pendingIds)} style={{ flex: 1, padding: "15px", backgroundColor: "#DC2626", color: "white", border: "none", borderRadius: "10px", fontSize: "15px", cursor: "pointer", fontWeight: "bold" }}>❌ Reject</button>
+                    </div>
                   ) : (
                     <button onClick={() => markTableServed(tableGroup.allIds)} style={{ width: "100%", padding: "15px", backgroundColor: COLORS.success, color: "white", border: "none", borderRadius: "10px", fontSize: "16px", cursor: "pointer", fontWeight: "bold" }}>✓ Mark Table Served</button>
                   )}
