@@ -84,33 +84,103 @@ export default function Kitchen() {
     try {
       const isCurrentlyOut = outOfStock.includes(itemId);
       const docRef = doc(db, "settings", "mysuru_cafe");
-      
       const docSnap = await getDoc(docRef);
-      
       if (!docSnap.exists()) {
         await setDoc(docRef, { outOfStock: [itemId] });
       } else {
-        await setDoc(docRef, { 
-          outOfStock: isCurrentlyOut ? arrayRemove(itemId) : arrayUnion(itemId) 
-        }, { merge: true });
+        await setDoc(docRef, { outOfStock: isCurrentlyOut ? arrayRemove(itemId) : arrayUnion(itemId) }, { merge: true });
       }
     } catch (error) {
       console.error("FIREBASE ERROR:", error);
-      alert("Failed to update inventory! Right-click > Inspect > Console to see the error.");
+      alert("Failed to update inventory!");
     }
   };
 
-  const settleBill = async (tableNumber, alertId) => {
-    const batch = writeBatch(db);
-    batch.update(doc(db, "alerts", alertId), { status: "resolved" });
+  // 🚨 CHANGED: Settle Bill now works directly on the table, no alert ID needed
+  const settleBill = async (tableNumber) => {
+    const confirmSettle = window.confirm(`Has Table ${tableNumber} paid their bill? This will clear the table.`);
+    if (confirmSettle) {
+      const batch = writeBatch(db);
+      unpaidOrders.forEach((order) => {
+        if (order.table_number === tableNumber) {
+          batch.update(doc(db, "orders", order.id), { status: "paid" });
+        }
+      });
+      await batch.commit(); 
+    }
+  };
+
+  const printBill = (tableNum) => {
+    const tableOrders = unpaidOrders.filter(order => order.table_number === tableNum);
+    if (tableOrders.length === 0) return alert("No active orders for this table.");
     
-    unpaidOrders.forEach((order) => {
-      if (order.table_number === tableNumber) {
-        batch.update(doc(db, "orders", order.id), { status: "paid" });
-      }
+    let itemsList = [];
+    let grandTotal = 0;
+
+    tableOrders.forEach(order => {
+      order.items.forEach(item => {
+        const existing = itemsList.find(i => i.name === item.name);
+        if (existing) {
+          existing.qty += item.qty;
+          existing.total += (item.price * item.qty);
+        } else {
+          itemsList.push({ name: item.name, qty: item.qty, price: item.price, total: (item.price * item.qty) });
+        }
+        grandTotal += (item.price * item.qty);
+      });
     });
-    
-    await batch.commit(); 
+
+    const receiptWindow = window.open('', '_blank', 'width=400,height=600');
+    receiptWindow.document.write(`
+      <html>
+        <head>
+          <title>Bill - Table ${tableNum}</title>
+          <style>
+            body { font-family: 'Courier New', Courier, monospace; width: 300px; margin: 0 auto; padding: 10px; color: #000; }
+            h2 { text-align: center; margin: 0 0 5px 0; font-size: 22px; }
+            .text-center { text-align: center; font-size: 14px; }
+            .divider { border-bottom: 1px dashed #000; margin: 10px 0; }
+            table { width: 100%; border-collapse: collapse; }
+            th, td { text-align: left; padding: 4px 0; font-size: 14px; }
+            .right { text-align: right; }
+            .total-row { font-size: 18px; font-weight: bold; margin-top: 10px; display: flex; justify-content: space-between; }
+            @media print {
+              body { width: 100%; margin: 0; padding: 0; }
+            }
+          </style>
+        </head>
+        <body>
+          <h2>MYSURU CAFE</h2>
+          <div class="text-center">Table ${tableNum}</div>
+          <div class="text-center">${new Date().toLocaleString('en-IN')}</div>
+          <div class="divider"></div>
+          <table>
+            <tr><th>Item</th><th class="right">Qty</th><th class="right">Total</th></tr>
+            ${itemsList.map(item => `
+              <tr>
+                <td>${item.name}</td>
+                <td class="right">${item.qty}</td>
+                <td class="right">Rs.${item.total}</td>
+              </tr>
+            `).join('')}
+          </table>
+          <div class="divider"></div>
+          <div class="total-row">
+            <span>GRAND TOTAL</span>
+            <span>Rs.${grandTotal}</span>
+          </div>
+          <div class="divider"></div>
+          <div class="text-center" style="margin-top: 15px;">Thank you for dining with us!</div>
+          <script>
+            window.onload = function() { 
+              window.print(); 
+              window.close(); 
+            }
+          </script>
+        </body>
+      </html>
+    `);
+    receiptWindow.document.close();
   };
 
   const acceptNewItems = async (pendingIds) => {
@@ -119,19 +189,12 @@ export default function Kitchen() {
     await batch.commit();
   };
 
-  // --- NEW: REJECT GHOST ORDERS ---
   const rejectNewItems = async (pendingIds) => {
-    const confirmReject = window.confirm("Are you sure you want to REJECT this new order? (Table is empty?)");
-    
+    const confirmReject = window.confirm("Are you sure you want to REJECT this new order?");
     if (confirmReject) {
-      try {
-        const batch = writeBatch(db);
-        pendingIds.forEach((id) => batch.update(doc(db, "orders", id), { status: "rejected" }));
-        await batch.commit();
-      } catch (error) {
-        console.error("Error rejecting order: ", error);
-        alert("Could not reject the order. Check your connection.");
-      }
+      const batch = writeBatch(db);
+      pendingIds.forEach((id) => batch.update(doc(db, "orders", id), { status: "rejected" }));
+      await batch.commit();
     }
   };
 
@@ -147,10 +210,10 @@ export default function Kitchen() {
     await batch.commit();
   };
 
+  // 🚨 CHANGED: We removed the check for "bill" alerts here since we don't use them anymore
   const getTableStatus = (tableNum) => {
-    if (alerts.find(a => a.table_number === tableNum && a.type === "bill")) return { text: "Ready to Pay", bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5" };
     if (alerts.find(a => a.table_number === tableNum && a.type === "waiter")) return { text: "Needs Waiter", bg: "#FFFBEB", color: "#D97706", border: "#FDE68A" };
-    if (occupiedTables.includes(tableNum)) return { text: "Occupied", bg: "#ECFDF5", color: "#059669", border: "#6EE7B7" };
+    if (occupiedTables.includes(tableNum)) return { text: "Dining", bg: "#ECFDF5", color: "#059669", border: "#6EE7B7" };
     return { text: "Vacant", bg: COLORS.white, color: COLORS.secondaryText, border: "#E5E7EB" };
   };
 
@@ -183,22 +246,16 @@ export default function Kitchen() {
         </button>
       </div>
 
+      {/* ONLY SHOWS WAITER ALERTS NOW */}
       {alerts.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "30px" }}>
           {alerts.map(alert => (
-            <div key={alert.id} style={{ backgroundColor: alert.type === "bill" ? "#ECFDF5" : "#FFFBEB", borderLeft: `5px solid ${alert.type === "bill" ? COLORS.success : "#F59E0B"}`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
-              {alert.type === "bill" ? (
-                <>
-                  <strong style={{ color: COLORS.success, fontSize: "18px" }}>💰 Table {alert.table_number} is ready to pay! (Total: ₹{alert.total})</strong>
-                  <button onClick={() => settleBill(alert.table_number, alert.id)} style={{ backgroundColor: COLORS.success, color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Settle & Clear Table</button>
-                </>
-              ) : (
-                <>
-                  <strong style={{ color: "#D97706", fontSize: "18px" }}>🔔 Table {alert.table_number} needs a waiter!</strong>
-                  <button onClick={() => markWaiterResolved(alert.id)} style={{ backgroundColor: "#F59E0B", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Mark Resolved</button>
-                </>
-              )}
-            </div>
+            alert.type === "waiter" && (
+              <div key={alert.id} style={{ backgroundColor: "#FFFBEB", borderLeft: `5px solid #F59E0B`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
+                <strong style={{ color: "#D97706", fontSize: "18px" }}>🔔 Table {alert.table_number} needs a waiter!</strong>
+                <button onClick={() => markWaiterResolved(alert.id)} style={{ backgroundColor: "#F59E0B", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Mark Resolved</button>
+              </div>
+            )
           ))}
         </div>
       )}
@@ -211,13 +268,23 @@ export default function Kitchen() {
       {activeTab === "ops" && (
         <div>
           <h2 style={{ color: COLORS.primaryText, marginBottom: "15px", fontSize: "20px" }}>Floor Map</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "15px", marginBottom: "40px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "15px", marginBottom: "40px" }}>
             {TOTAL_TABLES.map(tableNum => {
               const status = getTableStatus(tableNum);
+              const isOccupied = occupiedTables.includes(tableNum);
+              
               return (
                 <div key={tableNum} style={{ padding: "15px", borderRadius: "12px", backgroundColor: status.bg, border: `2px solid ${status.border}`, textAlign: "center", display: "flex", flexDirection: "column", gap: "5px", boxShadow: "0 4px 10px rgba(0,0,0,0.03)" }}>
                   <h3 style={{ margin: 0, color: status.color, fontSize: "18px" }}>Table {tableNum}</h3>
-                  <span style={{ fontSize: "11px", fontWeight: "bold", color: status.color, textTransform: "uppercase" }}>{status.text}</span>
+                  <span style={{ fontSize: "11px", fontWeight: "bold", color: status.color, textTransform: "uppercase", marginBottom: "10px" }}>{status.text}</span>
+                  
+                  {/* 🚨 CHANGED: Added Print and Settle Buttons directly to the Floor Map for occupied tables */}
+                  {isOccupied && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <button onClick={() => printBill(tableNum)} style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>🖨️ Print Bill</button>
+                      <button onClick={() => settleBill(tableNum)} style={{ backgroundColor: COLORS.success, color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>💰 Settle</button>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -235,7 +302,6 @@ export default function Kitchen() {
               const hasNewItems = tableGroup.pendingIds.length > 0;
               return (
                 <div key={tableGroup.table_number} style={{ border: `1px solid ${hasNewItems ? '#F59E0B' : '#E5E7EB'}`, borderRadius: "16px", padding: "20px", width: "300px", backgroundColor: COLORS.ticketBg, display: "flex", flexDirection: "column", boxShadow: hasNewItems ? "0 0 15px rgba(245, 158, 11, 0.3)" : "0 8px 20px rgba(0,0,0,0.04)" }}>
-                  
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
                     <h3 style={{ margin: 0, color: COLORS.white, backgroundColor: COLORS.primaryText, padding: "6px 14px", borderRadius: "8px", fontSize: "18px" }}>Table {tableGroup.table_number}</h3>
                     {hasNewItems && <span style={{ color: "#D97706", fontSize: "12px", fontWeight: "bold", backgroundColor: "#FEF3C7", padding: "4px 8px", borderRadius: "6px", animation: "pulse 2s infinite" }}>New Additions!</span>}
@@ -290,7 +356,6 @@ export default function Kitchen() {
           </div>
         </div>
       )}
-
       <style>{`@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }`}</style>
     </div>
   );
