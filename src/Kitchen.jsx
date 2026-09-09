@@ -289,19 +289,11 @@ export default function Kitchen() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "15px", marginBottom: "40px" }}>
             {TOTAL_TABLES.map(tableNum => {
               const status = getTableStatus(tableNum);
-              const isOccupied = occupiedTables.includes(tableNum);
               
               return (
                 <div key={tableNum} style={{ padding: "15px", borderRadius: "12px", backgroundColor: status.bg, border: `2px solid ${status.border}`, textAlign: "center", display: "flex", flexDirection: "column", gap: "5px", boxShadow: "0 4px 10px rgba(0,0,0,0.03)" }}>
                   <h3 style={{ margin: 0, color: status.color, fontSize: "18px" }}>Table {tableNum}</h3>
-                  <span style={{ fontSize: "11px", fontWeight: "bold", color: status.color, textTransform: "uppercase", marginBottom: "10px" }}>{status.text}</span>
-                  
-                  {isOccupied && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                      <button onClick={() => printBill(tableNum)} style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>🖨️ Print</button>
-                      <button onClick={() => settleBill(tableNum)} style={{ backgroundColor: COLORS.success, color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>💰 Settle</button>
-                    </div>
-                  )}
+                  <span style={{ fontSize: "11px", fontWeight: "bold", color: status.color, textTransform: "uppercase", marginBottom: "0px" }}>{status.text}</span>
                 </div>
               );
             })}
