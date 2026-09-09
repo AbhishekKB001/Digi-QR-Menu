@@ -96,18 +96,25 @@ export default function Kitchen() {
     }
   };
 
-  // 🚨 CHANGED: Settle Bill now works directly on the table, no alert ID needed
+  // 🚨 CHANGED: No more confirmation dialog! It instantly settles the bill and clears the table.
   const settleBill = async (tableNumber) => {
-    const confirmSettle = window.confirm(`Has Table ${tableNumber} paid their bill? This will clear the table.`);
-    if (confirmSettle) {
-      const batch = writeBatch(db);
-      unpaidOrders.forEach((order) => {
-        if (order.table_number === tableNumber) {
-          batch.update(doc(db, "orders", order.id), { status: "paid" });
-        }
-      });
-      await batch.commit(); 
-    }
+    const batch = writeBatch(db);
+    
+    // 1. Mark orders as paid
+    unpaidOrders.forEach((order) => {
+      if (order.table_number === tableNumber) {
+        batch.update(doc(db, "orders", order.id), { status: "paid" });
+      }
+    });
+
+    // 2. Clear the notification alert if one exists
+    alerts.forEach((alert) => {
+      if (alert.table_number === tableNumber && alert.type === "bill") {
+        batch.update(doc(db, "alerts", alert.id), { status: "resolved" });
+      }
+    });
+
+    await batch.commit(); 
   };
 
   const printBill = (tableNum) => {
@@ -210,8 +217,9 @@ export default function Kitchen() {
     await batch.commit();
   };
 
-  // 🚨 CHANGED: We removed the check for "bill" alerts here since we don't use them anymore
+  // 🚨 RESTORED: This makes the floor map turn red if a customer asks for the bill
   const getTableStatus = (tableNum) => {
+    if (alerts.find(a => a.table_number === tableNum && a.type === "bill")) return { text: "Ready to Pay", bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5" };
     if (alerts.find(a => a.table_number === tableNum && a.type === "waiter")) return { text: "Needs Waiter", bg: "#FFFBEB", color: "#D97706", border: "#FDE68A" };
     if (occupiedTables.includes(tableNum)) return { text: "Dining", bg: "#ECFDF5", color: "#059669", border: "#6EE7B7" };
     return { text: "Vacant", bg: COLORS.white, color: COLORS.secondaryText, border: "#E5E7EB" };
@@ -246,16 +254,26 @@ export default function Kitchen() {
         </button>
       </div>
 
-      {/* ONLY SHOWS WAITER ALERTS NOW */}
+      {/* 🚨 RESTORED: Both Bill Alerts and Waiter Alerts will show up here */}
       {alerts.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "30px" }}>
           {alerts.map(alert => (
-            alert.type === "waiter" && (
-              <div key={alert.id} style={{ backgroundColor: "#FFFBEB", borderLeft: `5px solid #F59E0B`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
-                <strong style={{ color: "#D97706", fontSize: "18px" }}>🔔 Table {alert.table_number} needs a waiter!</strong>
-                <button onClick={() => markWaiterResolved(alert.id)} style={{ backgroundColor: "#F59E0B", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Mark Resolved</button>
-              </div>
-            )
+            <div key={alert.id} style={{ backgroundColor: alert.type === "bill" ? "#ECFDF5" : "#FFFBEB", borderLeft: `5px solid ${alert.type === "bill" ? COLORS.success : "#F59E0B"}`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
+              {alert.type === "bill" ? (
+                <>
+                  <strong style={{ color: COLORS.success, fontSize: "18px" }}>💰 Table {alert.table_number} is ready to pay!</strong>
+                  <div style={{ display: "flex", gap: "10px" }}>
+                    <button onClick={() => printBill(alert.table_number)} style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>🖨️ Print Bill</button>
+                    <button onClick={() => settleBill(alert.table_number)} style={{ backgroundColor: COLORS.success, color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Settle & Clear</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <strong style={{ color: "#D97706", fontSize: "18px" }}>🔔 Table {alert.table_number} needs a waiter!</strong>
+                  <button onClick={() => markWaiterResolved(alert.id)} style={{ backgroundColor: "#F59E0B", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Mark Resolved</button>
+                </>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -278,10 +296,9 @@ export default function Kitchen() {
                   <h3 style={{ margin: 0, color: status.color, fontSize: "18px" }}>Table {tableNum}</h3>
                   <span style={{ fontSize: "11px", fontWeight: "bold", color: status.color, textTransform: "uppercase", marginBottom: "10px" }}>{status.text}</span>
                   
-                  {/* 🚨 CHANGED: Added Print and Settle Buttons directly to the Floor Map for occupied tables */}
                   {isOccupied && (
                     <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                      <button onClick={() => printBill(tableNum)} style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>🖨️ Print Bill</button>
+                      <button onClick={() => printBill(tableNum)} style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>🖨️ Print</button>
                       <button onClick={() => settleBill(tableNum)} style={{ backgroundColor: COLORS.success, color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>💰 Settle</button>
                     </div>
                   )}
