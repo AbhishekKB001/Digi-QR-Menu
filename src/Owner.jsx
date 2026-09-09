@@ -20,13 +20,16 @@ export default function Owner() {
     window.location.href = "/Digi-QR-Menu/?portal=admin";
   };
 
-  useEffect(() => {
+useEffect(() => {
     const qOrders = query(collection(db, "orders"), where("restaurant_id", "==", "mysuru_cafe"));
     const unsubOrders = onSnapshot(qOrders, (snapshot) => {
-      let activeCount = 0; let completedTodayCount = 0; let totalRevenueToday = 0; let rejectedTodayCount = 0;
+      let activeCount = 0; let totalRevenueToday = 0; let rejectedTodayCount = 0;
       const historyGroups = {}; 
-      const itemTally = {}; // To track best sellers
+      const itemTally = {}; 
       const todayString = new Date().toDateString();
+      
+      // We need this to look up today's grouped bills later
+      const todayHeader = new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
       const rawOrders = [];
       snapshot.forEach((document) => rawOrders.push({ id: document.id, ...document.data() }));
@@ -45,9 +48,8 @@ export default function Owner() {
         }
 
         if ((data.status === "completed" || data.status === "paid") && isToday) {
-          completedTodayCount++; totalRevenueToday += orderTotal;
+          totalRevenueToday += orderTotal;
           
-          // Tally up the items sold today for the Top Sellers list
           data.items.forEach(item => {
             itemTally[item.name] = (itemTally[item.name] || 0) + (item.qty || 1);
           });
@@ -59,7 +61,7 @@ export default function Owner() {
 
         if (historyGroups[dateHeader][sessionId]) {
           historyGroups[dateHeader][sessionId].total += orderTotal;
-          if (data.status !== "paid") {
+          if (data.status !== "paid" && data.status !== "completed") {
             historyGroups[dateHeader][sessionId].status = data.status;
           }
         } else {
@@ -73,7 +75,16 @@ export default function Owner() {
         }
       });
 
-      // Calculate Top 5 Selling Items
+      // 🚨 NEW LOGIC: Count unique BILLS (sessions) for today instead of individual orders
+      let completedBillsCount = 0;
+      if (historyGroups[todayHeader]) {
+        Object.values(historyGroups[todayHeader]).forEach(session => {
+          if (session.status === "paid" || session.status === "completed") {
+            completedBillsCount++;
+          }
+        });
+      }
+
       const sortedItems = Object.keys(itemTally)
         .map(name => ({ name, qty: itemTally[name] }))
         .sort((a, b) => b.qty - a.qty)
@@ -85,7 +96,8 @@ export default function Owner() {
         finalGrouped[date] = Object.values(historyGroups[date]).sort((a, b) => b.dateObj.getTime() - a.dateObj.getTime());
       });
       
-      setStats({ active: activeCount, completedToday: completedTodayCount, revenueToday: totalRevenueToday, rejectedToday: rejectedTodayCount });
+      // Update stats using the new completedBillsCount
+      setStats({ active: activeCount, completedToday: completedBillsCount, revenueToday: totalRevenueToday, rejectedToday: rejectedTodayCount });
       setGroupedOrders(finalGrouped);
     });
 
@@ -108,6 +120,7 @@ export default function Owner() {
 
     return () => { unsubOrders(); unsubFeedback(); };
   }, []);
+
 
   const getRatingForOrder = (order) => {
     const orderTime = order.dateObj.getTime();
@@ -156,7 +169,7 @@ export default function Owner() {
               <h2 style={{ margin: 0, color: COLORS.primaryText, fontSize: "40px" }}>₹{stats.revenueToday}</h2>
             </div>
             <div style={{ backgroundColor: COLORS.white, padding: "25px", borderRadius: "16px", flex: "1", minWidth: "200px", borderTop: `6px solid ${COLORS.success}`, boxShadow: "0 4px 10px rgba(0,0,0,0.03)" }}>
-              <p style={{ margin: "0 0 10px 0", color: COLORS.secondaryText, fontSize: "14px", fontWeight: "bold" }}>COMPLETED ORDERS</p>
+            <p style={{ margin: "0 0 10px 0", color: COLORS.secondaryText, fontSize: "14px", fontWeight: "bold" }}>TOTAL BILLS SETTLED</p>
               <h2 style={{ margin: 0, color: COLORS.primaryText, fontSize: "40px" }}>{stats.completedToday}</h2>
             </div>
             <div style={{ backgroundColor: COLORS.white, padding: "25px", borderRadius: "16px", flex: "1", minWidth: "200px", borderTop: `6px solid #F59E0B`, boxShadow: "0 4px 10px rgba(0,0,0,0.03)" }}>
