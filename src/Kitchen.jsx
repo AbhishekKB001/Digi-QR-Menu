@@ -105,11 +105,25 @@ export default function Kitchen() {
   };
 
   const openTable = async (tableNum) => {
-    await setDoc(doc(db, "tables", tableNum.toString()), { is_active: true });
+    try {
+      await setDoc(doc(db, "tables", tableNum.toString()), { is_active: true });
+    } catch(e) { alert("Failed to open table"); }
   };
 
   const lockTable = async (tableNum) => {
-    await setDoc(doc(db, "tables", tableNum.toString()), { is_active: false });
+    try {
+      await setDoc(doc(db, "tables", tableNum.toString()), { is_active: false });
+    } catch(e) { alert("Failed to lock table"); }
+  };
+
+  // 🚨 FIXED: Now uses a blazing fast simultaneous Batch Write for Approvals
+  const approveAndUnlock = async (alertId, tableNum) => {
+    try {
+      const batch = writeBatch(db);
+      batch.set(doc(db, "tables", tableNum.toString()), { is_active: true });
+      batch.update(doc(db, "alerts", alertId), { status: "resolved" });
+      await batch.commit();
+    } catch (e) { alert("Action failed, please try again."); }
   };
 
   const settleBill = async (tableNumber) => {
@@ -262,10 +276,7 @@ export default function Kitchen() {
                   <strong style={{ color: "#1D4ED8", fontSize: "18px" }}>📱 Table {alert.table_number} is requesting the menu!</strong>
                   <div style={{ display: "flex", gap: "10px" }}>
                     <button 
-                      onClick={async () => {
-                        await openTable(alert.table_number);
-                        await markWaiterResolved(alert.id);
-                      }} 
+                      onClick={() => approveAndUnlock(alert.id, alert.table_number)} 
                       style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>
                       Approve & Unlock
                     </button>

@@ -1,4 +1,4 @@
-import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebase/auth";
+import { signInWithEmailAndPassword, signInAnonymously, signOut, onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
 import { useState, useEffect } from "react";
 import { collection, addDoc, serverTimestamp, query, where, onSnapshot, doc, getDoc } from "firebase/firestore";
@@ -73,14 +73,18 @@ export default function App() {
   const [loginError, setLoginError] = useState("");
 
   useEffect(() => {
+    // 🚨 FIXED: Anonymous Login Restored for Customers (Prevents hanging database writes)
+    const urlCheck = new URL(window.location.href);
+    if (urlCheck.searchParams.get("portal") !== "admin") {
+      signInAnonymously(auth).catch(console.error);
+    }
+
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
+      if (user && user.email) {
         const url = new URL(window.location.href);
         const isPortal = url.searchParams.get("portal") === "admin";
-        const hasCustomerSession = sessionStorage.getItem("customer_table_session");
-        const hasToken = url.searchParams.get("t");
-
-        if (isPortal || (!hasToken && !hasCustomerSession)) {
+        
+        if (isPortal) {
           if (user.email === "owner@mysurucafe.com") setView("owner");
           else if (user.email === "kitchen@mysurucafe.com") setView("kitchen");
         }
@@ -193,7 +197,6 @@ export default function App() {
     return () => { unsubOrders(); unsubMenu(); };
   }, [tableNumber]);
 
-  // Transition from paid bill to feedback screen
   useEffect(() => {
     if (showBill && tableOrders.length === 0) {
       setShowBill(false);
@@ -203,7 +206,7 @@ export default function App() {
 
   const requestUnlock = async () => {
     try {
-      setUnlockRequested(true);
+      setUnlockRequested(true); // Updates UI instantly
       await addDoc(collection(db, "alerts"), { 
         restaurant_id: "mysuru_cafe", 
         table_number: parseInt(tableNumber), 
@@ -212,7 +215,7 @@ export default function App() {
         created_at: serverTimestamp() 
       });
     } catch (error) {
-      alert("Failed to request menu. Please call a waiter.");
+      alert("Network error. Please call a waiter.");
       setUnlockRequested(false);
     }
   };
