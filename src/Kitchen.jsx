@@ -29,7 +29,7 @@ export default function Kitchen() {
   const [alerts, setAlerts] = useState([]);
   const [occupiedTables, setOccupiedTables] = useState([]);
   const [outOfStock, setOutOfStock] = useState([]);
-  const [activeTables, setActiveTables] = useState({}); // Tracks if a table is unlocked
+  const [activeTables, setActiveTables] = useState({});
 
   const handleLogout = async () => {
     await signOut(auth);
@@ -78,7 +78,6 @@ export default function Kitchen() {
       }
     });
 
-    // 🚨 NEW: Listens to the table lock statuses
     const unsubTables = onSnapshot(collection(db, "tables"), (snapshot) => {
       const tablesMap = {};
       snapshot.forEach(doc => {
@@ -105,7 +104,6 @@ export default function Kitchen() {
     }
   };
 
-  // 🚨 NEW: Functions to manually open or close a table
   const openTable = async (tableNum) => {
     await setDoc(doc(db, "tables", tableNum.toString()), { is_active: true });
   };
@@ -129,9 +127,7 @@ export default function Kitchen() {
       }
     });
 
-    // 🚨 NEW: Automatically lock the table after it is settled!
     batch.set(doc(db, "tables", tableNumber.toString()), { is_active: false });
-
     await batch.commit(); 
   };
 
@@ -169,9 +165,7 @@ export default function Kitchen() {
             th, td { text-align: left; padding: 4px 0; font-size: 14px; }
             .right { text-align: right; }
             .total-row { font-size: 18px; font-weight: bold; margin-top: 10px; display: flex; justify-content: space-between; }
-            @media print {
-              body { width: 100%; margin: 0; padding: 0; }
-            }
+            @media print { body { width: 100%; margin: 0; padding: 0; } }
           </style>
         </head>
         <body>
@@ -181,19 +175,10 @@ export default function Kitchen() {
           <div class="divider"></div>
           <table>
             <tr><th>Item</th><th class="right">Qty</th><th class="right">Total</th></tr>
-            ${itemsList.map(item => `
-              <tr>
-                <td>${item.name}</td>
-                <td class="right">${item.qty}</td>
-                <td class="right">Rs.${item.total}</td>
-              </tr>
-            `).join('')}
+            ${itemsList.map(item => `<tr><td>${item.name}</td><td class="right">${item.qty}</td><td class="right">Rs.${item.total}</td></tr>`).join('')}
           </table>
           <div class="divider"></div>
-          <div class="total-row">
-            <span>GRAND TOTAL</span>
-            <span>Rs.${grandTotal}</span>
-          </div>
+          <div class="total-row"><span>GRAND TOTAL</span><span>Rs.${grandTotal}</span></div>
           <div class="divider"></div>
           <div class="text-center" style="margin-top: 15px;">Thank you for dining with us!</div>
           <script>
@@ -232,7 +217,6 @@ export default function Kitchen() {
     await batch.commit();
   };
 
-  // 🚨 UPDATED: Now shows 4 states (Dining, Needs Waiter, Unlocked, Locked)
   const getTableStatus = (tableNum) => {
     if (alerts.find(a => a.table_number === tableNum && a.type === "waiter")) return { text: "Needs Waiter", bg: "#FFFBEB", color: "#D97706", border: "#FDE68A" };
     if (occupiedTables.includes(tableNum)) return { text: "Dining", bg: "#ECFDF5", color: "#059669", border: "#6EE7B7" };
@@ -271,11 +255,7 @@ export default function Kitchen() {
 
       {alerts.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "30px" }}>
-          {alerts.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "30px" }}>
           {alerts.map(alert => {
-            
-            // 🚨 NEW: Handle the Unlock Request Alert
             if (alert.type === "unlock_request") {
               return (
                 <div key={alert.id} style={{ backgroundColor: "#EFF6FF", borderLeft: `5px solid #3B82F6`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
@@ -283,7 +263,6 @@ export default function Kitchen() {
                   <div style={{ display: "flex", gap: "10px" }}>
                     <button 
                       onClick={async () => {
-                        // Approve request: Open table AND clear the alert
                         await openTable(alert.table_number);
                         await markWaiterResolved(alert.id);
                       }} 
@@ -300,7 +279,6 @@ export default function Kitchen() {
               );
             }
 
-            // Standard Waiter Alert
             if (alert.type === "waiter") {
               return (
                 <div key={alert.id} style={{ backgroundColor: "#FFFBEB", borderLeft: `5px solid #F59E0B`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
@@ -311,8 +289,6 @@ export default function Kitchen() {
             }
             return null;
           })}
-        </div>
-      )}
         </div>
       )}
 

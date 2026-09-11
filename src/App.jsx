@@ -57,15 +57,15 @@ export default function App() {
   const [orderSent, setOrderSent] = useState(false);
   const [tableNumber, setTableNumber] = useState(null);
   
-  // 🚨 NEW: Security State Variables
+  // Security State Variables
   const [isTableActive, setIsTableActive] = useState(false);
   const [isCheckingTable, setIsCheckingTable] = useState(true);
+  const [unlockRequested, setUnlockRequested] = useState(false);
 
   const [waiterCalled, setWaiterCalled] = useState(false);
   const [crowdStatus, setCrowdStatus] = useState({ text: "Low", time: "10-15 mins", color: "#10B981", bg: "#ECFDF5" });
   const [outOfStock, setOutOfStock] = useState([]);
   const [tableOrders, setTableOrders] = useState([]); 
-  const [waitingForPayment, setWaitingForPayment] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
   const [email, setEmail] = useState("");
@@ -129,7 +129,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 🚨 NEW: Table Security Effect
+  // Table Security Effect
   useEffect(() => {
     if (!tableNumber) {
       setIsCheckingTable(false);
@@ -139,6 +139,7 @@ export default function App() {
     const unsubTable = onSnapshot(doc(db, "tables", tableNumber.toString()), (docSnap) => {
       if (docSnap.exists() && docSnap.data().is_active === true) {
         setIsTableActive(true);
+        setUnlockRequested(false); // Reset if unlocked by staff
       } else {
         setIsTableActive(false);
       }
@@ -194,12 +195,27 @@ export default function App() {
 
   // Transition from paid bill to feedback screen
   useEffect(() => {
-    // If the table orders suddenly clear (because kitchen settled the bill), show feedback
     if (showBill && tableOrders.length === 0) {
       setShowBill(false);
       setShowFeedback(true);
     }
   }, [tableOrders, showBill]);
+
+  const requestUnlock = async () => {
+    try {
+      setUnlockRequested(true);
+      await addDoc(collection(db, "alerts"), { 
+        restaurant_id: "mysuru_cafe", 
+        table_number: parseInt(tableNumber), 
+        type: "unlock_request", 
+        status: "active", 
+        created_at: serverTimestamp() 
+      });
+    } catch (error) {
+      alert("Failed to request menu. Please call a waiter.");
+      setUnlockRequested(false);
+    }
+  };
 
   const callWaiter = async () => {
     setWaiterCalled(true);
@@ -345,7 +361,7 @@ export default function App() {
     );
   }
 
-  // 🚨 NEW: Security Bouncer Logic
+  // Security Bouncer & Unlock Request Logic
   if (isCheckingTable && tableNumber) {
     return (
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", backgroundColor: COLORS.background, fontFamily: "'Inter', sans-serif" }}>
@@ -354,37 +370,14 @@ export default function App() {
     );
   }
 
-  // Add this new state variable at the top of your App component (near your other state variables)
-  const [unlockRequested, setUnlockRequested] = useState(false);
-
-  // ... (rest of your code)
-
-  // 🚨 REPLACED: Security Bouncer Logic with "Request Menu" button
   if (!isTableActive && tableNumber && view === "customer") {
-    
-    const requestUnlock = async () => {
-      try {
-        setUnlockRequested(true);
-        await addDoc(collection(db, "alerts"), { 
-          restaurant_id: "mysuru_cafe", 
-          table_number: parseInt(tableNumber), 
-          type: "unlock_request", // Special alert type for the kitchen
-          status: "active", 
-          created_at: serverTimestamp() 
-        });
-      } catch (error) {
-        alert("Failed to request menu. Please call a waiter.");
-        setUnlockRequested(false);
-      }
-    };
-
     return (
       <div style={{ minHeight: "100vh", backgroundColor: COLORS.background, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "30px", textAlign: "center", fontFamily: "'Inter', 'Segoe UI', sans-serif" }}>
         <div style={{ fontSize: "60px", marginBottom: "20px" }}>🔒</div>
         <h1 style={{ color: COLORS.primaryText, fontSize: "28px", margin: "0 0 10px 0", fontWeight: "900" }}>Table Locked</h1>
         
         {unlockRequested ? (
-          <div style={{ backgroundColor: "#ECFDF5", padding: "15px", borderRadius: "12px", border: "1px solid #6EE7B7" }}>
+          <div style={{ backgroundColor: "#ECFDF5", padding: "15px", borderRadius: "12px", border: "1px solid #6EE7B7", marginTop: "15px" }}>
             <h3 style={{ color: COLORS.success, margin: "0 0 5px 0", fontSize: "16px" }}>Request Sent!</h3>
             <p style={{ color: "#065F46", fontSize: "14px", margin: 0 }}>The staff will unlock your menu in just a moment...</p>
           </div>
@@ -446,7 +439,6 @@ export default function App() {
             <span>₹{calculateGrandTotal()}</span>
           </div>
           
-          {/* 🚨 UPDATED: Replaced the final bill button with a static message since kitchen handles payment */}
           <div style={{ padding: "16px", backgroundColor: "#F3F4F6", color: COLORS.secondaryText, borderRadius: "12px", fontWeight: "700" }}>
             Waiters will process your payment at the table.
           </div>
