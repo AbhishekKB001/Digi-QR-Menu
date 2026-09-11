@@ -354,14 +354,53 @@ export default function App() {
     );
   }
 
+  // Add this new state variable at the top of your App component (near your other state variables)
+  const [unlockRequested, setUnlockRequested] = useState(false);
+
+  // ... (rest of your code)
+
+  // 🚨 REPLACED: Security Bouncer Logic with "Request Menu" button
   if (!isTableActive && tableNumber && view === "customer") {
+    
+    const requestUnlock = async () => {
+      try {
+        setUnlockRequested(true);
+        await addDoc(collection(db, "alerts"), { 
+          restaurant_id: "mysuru_cafe", 
+          table_number: parseInt(tableNumber), 
+          type: "unlock_request", // Special alert type for the kitchen
+          status: "active", 
+          created_at: serverTimestamp() 
+        });
+      } catch (error) {
+        alert("Failed to request menu. Please call a waiter.");
+        setUnlockRequested(false);
+      }
+    };
+
     return (
       <div style={{ minHeight: "100vh", backgroundColor: COLORS.background, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "30px", textAlign: "center", fontFamily: "'Inter', 'Segoe UI', sans-serif" }}>
         <div style={{ fontSize: "60px", marginBottom: "20px" }}>🔒</div>
         <h1 style={{ color: COLORS.primaryText, fontSize: "28px", margin: "0 0 10px 0", fontWeight: "900" }}>Table Locked</h1>
-        <p style={{ color: COLORS.secondaryText, fontSize: "16px", maxWidth: "300px", lineHeight: "1.6" }}>
-          Welcome to Mysuru Cafe! Please wait for a waiter to activate your table before viewing the menu.
-        </p>
+        
+        {unlockRequested ? (
+          <div style={{ backgroundColor: "#ECFDF5", padding: "15px", borderRadius: "12px", border: "1px solid #6EE7B7" }}>
+            <h3 style={{ color: COLORS.success, margin: "0 0 5px 0", fontSize: "16px" }}>Request Sent!</h3>
+            <p style={{ color: "#065F46", fontSize: "14px", margin: 0 }}>The staff will unlock your menu in just a moment...</p>
+          </div>
+        ) : (
+          <>
+            <p style={{ color: COLORS.secondaryText, fontSize: "16px", maxWidth: "300px", lineHeight: "1.6", marginBottom: "30px" }}>
+              Welcome to Mysuru Cafe! Please tap below to request access to the digital menu.
+            </p>
+            <button 
+              onClick={requestUnlock}
+              style={{ padding: "16px 30px", backgroundColor: COLORS.primaryText, color: "white", border: "none", borderRadius: "12px", fontSize: "16px", fontWeight: "800", cursor: "pointer", boxShadow: "0 10px 20px rgba(0,0,0,0.1)" }}
+            >
+              Unlock Menu
+            </button>
+          </>
+        )}
       </div>
     );
   }

@@ -271,14 +271,48 @@ export default function Kitchen() {
 
       {alerts.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "30px" }}>
-          {alerts.map(alert => (
-            alert.type === "waiter" && (
-              <div key={alert.id} style={{ backgroundColor: "#FFFBEB", borderLeft: `5px solid #F59E0B`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
-                <strong style={{ color: "#D97706", fontSize: "18px" }}>🔔 Table {alert.table_number} needs a waiter!</strong>
-                <button onClick={() => markWaiterResolved(alert.id)} style={{ backgroundColor: "#F59E0B", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Mark Resolved</button>
-              </div>
-            )
-          ))}
+          {alerts.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "30px" }}>
+          {alerts.map(alert => {
+            
+            // 🚨 NEW: Handle the Unlock Request Alert
+            if (alert.type === "unlock_request") {
+              return (
+                <div key={alert.id} style={{ backgroundColor: "#EFF6FF", borderLeft: `5px solid #3B82F6`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
+                  <strong style={{ color: "#1D4ED8", fontSize: "18px" }}>📱 Table {alert.table_number} is requesting the menu!</strong>
+                  <div style={{ display: "flex", gap: "10px" }}>
+                    <button 
+                      onClick={async () => {
+                        // Approve request: Open table AND clear the alert
+                        await openTable(alert.table_number);
+                        await markWaiterResolved(alert.id);
+                      }} 
+                      style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>
+                      Approve & Unlock
+                    </button>
+                    <button 
+                      onClick={() => markWaiterResolved(alert.id)} 
+                      style={{ backgroundColor: "#E5E7EB", color: "#4B5563", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>
+                      Reject (Clear)
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            // Standard Waiter Alert
+            if (alert.type === "waiter") {
+              return (
+                <div key={alert.id} style={{ backgroundColor: "#FFFBEB", borderLeft: `5px solid #F59E0B`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
+                  <strong style={{ color: "#D97706", fontSize: "18px" }}>🔔 Table {alert.table_number} needs a waiter!</strong>
+                  <button onClick={() => markWaiterResolved(alert.id)} style={{ backgroundColor: "#F59E0B", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Mark Resolved</button>
+                </div>
+              );
+            }
+            return null;
+          })}
+        </div>
+      )}
         </div>
       )}
 
