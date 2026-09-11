@@ -56,6 +56,11 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [orderSent, setOrderSent] = useState(false);
   const [tableNumber, setTableNumber] = useState(null);
+  
+  // 🚨 NEW: Security State Variables
+  const [isTableActive, setIsTableActive] = useState(false);
+  const [isCheckingTable, setIsCheckingTable] = useState(true);
+
   const [waiterCalled, setWaiterCalled] = useState(false);
   const [crowdStatus, setCrowdStatus] = useState({ text: "Low", time: "10-15 mins", color: "#10B981", bg: "#ECFDF5" });
   const [outOfStock, setOutOfStock] = useState([]);
@@ -108,12 +113,15 @@ export default function App() {
               }
               sessionStorage.setItem("customer_table_session", data.table_number);
               setTableNumber(data.table_number); 
-              window.history.replaceState({}, document.title, "/Digi-QR-Menu/");           
+              window.history.replaceState({}, document.title, "/Digi-QR-Menu/");          
              }
           }
         } catch (error) {
           console.error("Security check failed:", error);
         }
+      } else {
+        const existingSession = sessionStorage.getItem("customer_table_session");
+        if (existingSession) setTableNumber(existingSession);
       }
     };
 
@@ -121,7 +129,28 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // 🚨 NEW: Table Security Effect
   useEffect(() => {
+    if (!tableNumber) {
+      setIsCheckingTable(false);
+      return;
+    }
+
+    const unsubTable = onSnapshot(doc(db, "tables", tableNumber.toString()), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().is_active === true) {
+        setIsTableActive(true);
+      } else {
+        setIsTableActive(false);
+      }
+      setIsCheckingTable(false);
+    });
+    
+    return () => unsubTable();
+  }, [tableNumber]);
+
+  useEffect(() => {
+    if (!tableNumber) return;
+
     const qOrders = query(collection(db, "orders"), where("restaurant_id", "==", "mysuru_cafe"));
     const unsubOrders = onSnapshot(qOrders, (snapshot) => {
       let activeCount = 0;
@@ -134,7 +163,6 @@ export default function App() {
         
         const orderDateObj = data.created_at ? data.created_at.toDate() : new Date();
 
-        // 🚨 NEW: If this specific user's order is rejected, kick them out to the start screen
         if (data.status === "rejected" && data.meal_session_id === sessionStorage.getItem("meal_session_id")) {
           sessionStorage.removeItem("customer_table_session");
           sessionStorage.removeItem("meal_session_id");
@@ -142,7 +170,6 @@ export default function App() {
           window.location.href = "/Digi-QR-Menu/";
         }
 
-        // 🚨 NEW: Filter out "rejected" orders so they don't show up on the table's bill
         if (data.table_number === parseInt(tableNumber) && orderDateObj.toDateString() === todayString && data.status !== "paid" && data.status !== "rejected") {
           myTableOrders.push({ id: doc.id, ...data });
         }
@@ -165,23 +192,19 @@ export default function App() {
     return () => { unsubOrders(); unsubMenu(); };
   }, [tableNumber]);
 
+  // Transition from paid bill to feedback screen
   useEffect(() => {
-    if (waitingForPayment && tableOrders.length === 0) {
-      setWaitingForPayment(false);
+    // If the table orders suddenly clear (because kitchen settled the bill), show feedback
+    if (showBill && tableOrders.length === 0) {
       setShowBill(false);
       setShowFeedback(true);
     }
-  }, [tableOrders, waitingForPayment]);
+  }, [tableOrders, showBill]);
 
   const callWaiter = async () => {
     setWaiterCalled(true);
     await addDoc(collection(db, "alerts"), { restaurant_id: "mysuru_cafe", table_number: parseInt(tableNumber), type: "waiter", status: "active", created_at: serverTimestamp() });
     setTimeout(() => setWaiterCalled(false), 5000); 
-  };
-
-  const requestFinalBill = async () => {
-    setWaitingForPayment(true);
-    await addDoc(collection(db, "alerts"), { restaurant_id: "mysuru_cafe", table_number: parseInt(tableNumber), type: "bill", total: calculateGrandTotal(), status: "active", created_at: serverTimestamp() });
   };
 
   const submitFeedback = async (rating) => {
@@ -322,6 +345,27 @@ export default function App() {
     );
   }
 
+  // 🚨 NEW: Security Bouncer Logic
+  if (isCheckingTable && tableNumber) {
+    return (
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", backgroundColor: COLORS.background, fontFamily: "'Inter', sans-serif" }}>
+        <h3 style={{ color: COLORS.primaryText }}>Securely connecting to Table {tableNumber}...</h3>
+      </div>
+    );
+  }
+
+  if (!isTableActive && tableNumber && view === "customer") {
+    return (
+      <div style={{ minHeight: "100vh", backgroundColor: COLORS.background, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "30px", textAlign: "center", fontFamily: "'Inter', 'Segoe UI', sans-serif" }}>
+        <div style={{ fontSize: "60px", marginBottom: "20px" }}>🔒</div>
+        <h1 style={{ color: COLORS.primaryText, fontSize: "28px", margin: "0 0 10px 0", fontWeight: "900" }}>Table Locked</h1>
+        <p style={{ color: COLORS.secondaryText, fontSize: "16px", maxWidth: "300px", lineHeight: "1.6" }}>
+          Welcome to Mysuru Cafe! Please wait for a waiter to activate your table before viewing the menu.
+        </p>
+      </div>
+    );
+  }
+
   if (orderSent) {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", backgroundColor: COLORS.background, textAlign: "center", fontFamily: "'Inter', 'Segoe UI', sans-serif" }}>
@@ -340,10 +384,8 @@ export default function App() {
   if (showBill) {
     return (
       <div style={{ backgroundColor: COLORS.background, minHeight: "100vh", padding: "20px", fontFamily: "'Inter', 'Segoe UI', sans-serif" }}>
-        {!waitingForPayment && (
-          <button onClick={() => setShowBill(false)} style={{ backgroundColor: "transparent", border: "none", fontSize: "24px", cursor: "pointer", color: COLORS.primaryText, marginBottom: "20px", fontWeight: "bold" }}>← Back</button>
-        )}
-        <div style={{ backgroundColor: COLORS.white, padding: "30px", borderRadius: "16px", boxShadow: "0 10px 25px rgba(0,0,0,0.05)", maxWidth: "400px", margin: "0 auto", textAlign: "center", opacity: waitingForPayment ? 0.7 : 1 }}>
+        <button onClick={() => setShowBill(false)} style={{ backgroundColor: "transparent", border: "none", fontSize: "24px", cursor: "pointer", color: COLORS.primaryText, marginBottom: "20px", fontWeight: "bold" }}>← Back</button>
+        <div style={{ backgroundColor: COLORS.white, padding: "30px", borderRadius: "16px", boxShadow: "0 10px 25px rgba(0,0,0,0.05)", maxWidth: "400px", margin: "0 auto", textAlign: "center" }}>
           <h2 style={{ color: COLORS.primaryText, margin: "0 0 5px 0", fontWeight: "900" }}>Mysore Cafe</h2>
           <p style={{ color: COLORS.secondaryText, margin: "0 0 20px 0", fontWeight: "600" }}>Table {tableNumber} • Digital Receipt</p>
           <hr style={{ borderTop: `1px dashed ${COLORS.border}`, marginBottom: "20px" }} />
@@ -364,15 +406,12 @@ export default function App() {
             <span>Grand Total</span>
             <span>₹{calculateGrandTotal()}</span>
           </div>
-          {waitingForPayment ? (
-            <div style={{ padding: "16px", backgroundColor: "#F3F4F6", color: COLORS.secondaryText, borderRadius: "12px", fontWeight: "700" }}>
-              ⏳ Waiting for Manager to clear bill...
-            </div>
-          ) : (
-            <button onClick={requestFinalBill} style={{ width: "100%", backgroundColor: COLORS.success, color: "white", padding: "16px", border: "none", borderRadius: "12px", fontSize: "16px", fontWeight: "800", cursor: "pointer", boxShadow: "0 10px 20px rgba(16, 185, 129, 0.2)" }}>
-              Request Waiter for Payment
-            </button>
-          )}
+          
+          {/* 🚨 UPDATED: Replaced the final bill button with a static message since kitchen handles payment */}
+          <div style={{ padding: "16px", backgroundColor: "#F3F4F6", color: COLORS.secondaryText, borderRadius: "12px", fontWeight: "700" }}>
+            Waiters will process your payment at the table.
+          </div>
+          
         </div>
       </div>
     );

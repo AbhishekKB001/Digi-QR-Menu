@@ -29,6 +29,7 @@ export default function Kitchen() {
   const [alerts, setAlerts] = useState([]);
   const [occupiedTables, setOccupiedTables] = useState([]);
   const [outOfStock, setOutOfStock] = useState([]);
+  const [activeTables, setActiveTables] = useState({}); // Tracks if a table is unlocked
 
   const handleLogout = async () => {
     await signOut(auth);
@@ -77,7 +78,16 @@ export default function Kitchen() {
       }
     });
 
-    return () => { unsubOrders(); unsubAlerts(); unsubMenu(); };
+    // 🚨 NEW: Listens to the table lock statuses
+    const unsubTables = onSnapshot(collection(db, "tables"), (snapshot) => {
+      const tablesMap = {};
+      snapshot.forEach(doc => {
+        tablesMap[doc.id] = doc.data().is_active;
+      });
+      setActiveTables(tablesMap);
+    });
+
+    return () => { unsubOrders(); unsubAlerts(); unsubMenu(); unsubTables(); };
   }, []);
 
   const toggleAvailability = async (itemId) => {
@@ -91,28 +101,36 @@ export default function Kitchen() {
         await setDoc(docRef, { outOfStock: isCurrentlyOut ? arrayRemove(itemId) : arrayUnion(itemId) }, { merge: true });
       }
     } catch (error) {
-      console.error("FIREBASE ERROR:", error);
       alert("Failed to update inventory!");
     }
   };
 
-  // 🚨 CHANGED: No more confirmation dialog! It instantly settles the bill and clears the table.
+  // 🚨 NEW: Functions to manually open or close a table
+  const openTable = async (tableNum) => {
+    await setDoc(doc(db, "tables", tableNum.toString()), { is_active: true });
+  };
+
+  const lockTable = async (tableNum) => {
+    await setDoc(doc(db, "tables", tableNum.toString()), { is_active: false });
+  };
+
   const settleBill = async (tableNumber) => {
     const batch = writeBatch(db);
     
-    // 1. Mark orders as paid
     unpaidOrders.forEach((order) => {
       if (order.table_number === tableNumber) {
         batch.update(doc(db, "orders", order.id), { status: "paid" });
       }
     });
 
-    // 2. Clear the notification alert if one exists
     alerts.forEach((alert) => {
       if (alert.table_number === tableNumber && alert.type === "bill") {
         batch.update(doc(db, "alerts", alert.id), { status: "resolved" });
       }
     });
+
+    // 🚨 NEW: Automatically lock the table after it is settled!
+    batch.set(doc(db, "tables", tableNumber.toString()), { is_active: false });
 
     await batch.commit(); 
   };
@@ -179,10 +197,7 @@ export default function Kitchen() {
           <div class="divider"></div>
           <div class="text-center" style="margin-top: 15px;">Thank you for dining with us!</div>
           <script>
-            window.onload = function() { 
-              window.print(); 
-              window.close(); 
-            }
+            window.onload = function() { window.print(); window.close(); }
           </script>
         </body>
       </html>
@@ -217,12 +232,12 @@ export default function Kitchen() {
     await batch.commit();
   };
 
-  // 🚨 RESTORED: This makes the floor map turn red if a customer asks for the bill
+  // 🚨 UPDATED: Now shows 4 states (Dining, Needs Waiter, Unlocked, Locked)
   const getTableStatus = (tableNum) => {
-    if (alerts.find(a => a.table_number === tableNum && a.type === "bill")) return { text: "Ready to Pay", bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5" };
     if (alerts.find(a => a.table_number === tableNum && a.type === "waiter")) return { text: "Needs Waiter", bg: "#FFFBEB", color: "#D97706", border: "#FDE68A" };
     if (occupiedTables.includes(tableNum)) return { text: "Dining", bg: "#ECFDF5", color: "#059669", border: "#6EE7B7" };
-    return { text: "Vacant", bg: COLORS.white, color: COLORS.secondaryText, border: "#E5E7EB" };
+    if (activeTables[tableNum.toString()]) return { text: "Unlocked (Empty)", bg: "#EFF6FF", color: "#3B82F6", border: "#93C5FD" };
+    return { text: "Locked", bg: COLORS.white, color: COLORS.secondaryText, border: "#E5E7EB" };
   };
 
   const groupedTables = {};
@@ -254,26 +269,15 @@ export default function Kitchen() {
         </button>
       </div>
 
-      {/* 🚨 RESTORED: Both Bill Alerts and Waiter Alerts will show up here */}
       {alerts.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "30px" }}>
           {alerts.map(alert => (
-            <div key={alert.id} style={{ backgroundColor: alert.type === "bill" ? "#ECFDF5" : "#FFFBEB", borderLeft: `5px solid ${alert.type === "bill" ? COLORS.success : "#F59E0B"}`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
-              {alert.type === "bill" ? (
-                <>
-                  <strong style={{ color: COLORS.success, fontSize: "18px" }}>💰 Table {alert.table_number} is ready to pay!</strong>
-                  <div style={{ display: "flex", gap: "10px" }}>
-                    <button onClick={() => printBill(alert.table_number)} style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>🖨️ Print Bill</button>
-                    <button onClick={() => settleBill(alert.table_number)} style={{ backgroundColor: COLORS.success, color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Settle & Clear</button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <strong style={{ color: "#D97706", fontSize: "18px" }}>🔔 Table {alert.table_number} needs a waiter!</strong>
-                  <button onClick={() => markWaiterResolved(alert.id)} style={{ backgroundColor: "#F59E0B", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Mark Resolved</button>
-                </>
-              )}
-            </div>
+            alert.type === "waiter" && (
+              <div key={alert.id} style={{ backgroundColor: "#FFFBEB", borderLeft: `5px solid #F59E0B`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
+                <strong style={{ color: "#D97706", fontSize: "18px" }}>🔔 Table {alert.table_number} needs a waiter!</strong>
+                <button onClick={() => markWaiterResolved(alert.id)} style={{ backgroundColor: "#F59E0B", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Mark Resolved</button>
+              </div>
+            )
           ))}
         </div>
       )}
@@ -289,11 +293,28 @@ export default function Kitchen() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "15px", marginBottom: "40px" }}>
             {TOTAL_TABLES.map(tableNum => {
               const status = getTableStatus(tableNum);
+              const isOccupied = occupiedTables.includes(tableNum);
+              const isUnlocked = activeTables[tableNum.toString()];
               
               return (
-                <div key={tableNum} style={{ padding: "15px", borderRadius: "12px", backgroundColor: status.bg, border: `2px solid ${status.border}`, textAlign: "center", display: "flex", flexDirection: "column", gap: "5px", boxShadow: "0 4px 10px rgba(0,0,0,0.03)" }}>
+                <div key={tableNum} style={{ padding: "15px", borderRadius: "12px", backgroundColor: status.bg, border: `2px solid ${status.border}`, textAlign: "center", display: "flex", flexDirection: "column", gap: "5px", boxShadow: "0 4px 10px rgba(0,0,0,0.03)", height: "130px" }}>
                   <h3 style={{ margin: 0, color: status.color, fontSize: "18px" }}>Table {tableNum}</h3>
-                  <span style={{ fontSize: "11px", fontWeight: "bold", color: status.color, textTransform: "uppercase", marginBottom: "0px" }}>{status.text}</span>
+                  <span style={{ fontSize: "11px", fontWeight: "bold", color: status.color, textTransform: "uppercase", marginBottom: "10px" }}>{status.text}</span>
+                  
+                  {isOccupied && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "auto" }}>
+                      <button onClick={() => printBill(tableNum)} style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>🖨️ Print</button>
+                      <button onClick={() => settleBill(tableNum)} style={{ backgroundColor: COLORS.success, color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>💰 Settle</button>
+                    </div>
+                  )}
+
+                  {!isOccupied && !isUnlocked && (
+                    <button onClick={() => openTable(tableNum)} style={{ backgroundColor: "#111827", color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px", marginTop: "auto" }}>🔓 Open Table</button>
+                  )}
+
+                  {!isOccupied && isUnlocked && (
+                    <button onClick={() => lockTable(tableNum)} style={{ backgroundColor: "#E5E7EB", color: "#4B5563", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px", marginTop: "auto" }}>🔒 Lock</button>
+                  )}
                 </div>
               );
             })}
