@@ -2,7 +2,7 @@
   "name": "digiqrmenus",
   "private": true,
   "version": "0.0.0",
-  "homepage": "https://AbhishekKB001.github.io/Digi-QR-Menu",
+  "homepage": "https://[YOUR_GITHUB_USERNAME].github.io/Digi-QR-Menu",
   "type": "module",
   "scripts": {
     "dev": "vite",

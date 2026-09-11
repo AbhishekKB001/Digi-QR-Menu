@@ -17,7 +17,8 @@ export default function Owner() {
 
   const handleLogout = async () => {
     await signOut(auth);
-    window.location.href = "/Digi-QR-Menu/?portal=admin";
+    // 🚨 IMPORTANT: Include the repo name in the path!
+    window.location.href = "/Digi-QR-Menu/?portal=admin"; 
   };
 
 useEffect(() => {
