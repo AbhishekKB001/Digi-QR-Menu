@@ -324,9 +324,9 @@ export default function Kitchen() {
                   <span style={{ fontSize: "11px", fontWeight: "bold", color: status.color, textTransform: "uppercase", marginBottom: "10px" }}>{status.text}</span>
                   
                   {isOccupied && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "auto" }}>
-                      <button onClick={() => printBill(tableNum)} style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>🖨️ Print</button>
-                      <button onClick={() => settleBill(tableNum)} style={{ backgroundColor: COLORS.success, color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>💰 Settle</button>
+                    <div style={{ display: "flex", flexDirection: "row", gap: "5px", marginTop: "auto" }}>
+                      <button onClick={() => printBill(tableNum)} style={{ backgroundColor: "#475e94", color: "white", border: "none", padding: "9px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>🖨️ Print</button>
+                      <button onClick={() => settleBill(tableNum)} style={{ backgroundColor: "#475e94", color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>💰 Settle</button>
                     </div>
                   )}
 
