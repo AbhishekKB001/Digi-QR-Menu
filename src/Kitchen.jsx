@@ -1,7 +1,7 @@
 import { signOut } from "firebase/auth";
 import { auth } from "./firebase";
 import { useState, useEffect } from "react";
-import { collection, query, where, onSnapshot, doc, setDoc, writeBatch, arrayUnion, arrayRemove, getDoc } from "firebase/firestore";
+import { collection, query, where, onSnapshot, doc, setDoc, writeBatch, arrayUnion, arrayRemove, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "./firebase";
 
 const MENU_ITEMS = [
@@ -33,7 +33,6 @@ export default function Kitchen() {
 
   const handleLogout = async () => {
     await signOut(auth);
-    // 🚨 IMPORTANT: Include the repo name in the path!
     window.location.href = "/Digi-QR-Menu/?portal=admin"; 
   };
   
@@ -117,7 +116,6 @@ export default function Kitchen() {
     } catch(e) { alert("Failed to lock table"); }
   };
 
-  // 🚨 FIXED: Now uses a blazing fast simultaneous Batch Write for Approvals
   const approveAndUnlock = async (alertId, tableNum) => {
     try {
       const batch = writeBatch(db);
@@ -129,19 +127,16 @@ export default function Kitchen() {
 
   const settleBill = async (tableNumber) => {
     const batch = writeBatch(db);
-    
     unpaidOrders.forEach((order) => {
       if (order.table_number === tableNumber) {
         batch.update(doc(db, "orders", order.id), { status: "paid" });
       }
     });
-
     alerts.forEach((alert) => {
       if (alert.table_number === tableNumber && alert.type === "bill") {
         batch.update(doc(db, "alerts", alert.id), { status: "resolved" });
       }
     });
-
     batch.set(doc(db, "tables", tableNumber.toString()), { is_active: false });
     await batch.commit(); 
   };
@@ -212,10 +207,20 @@ export default function Kitchen() {
   };
 
   const rejectNewItems = async (pendingIds) => {
-    const confirmReject = window.confirm("Are you sure you want to REJECT this new order?");
+    const confirmReject = window.confirm("Are you sure you want to REJECT this new order and lock the table?");
     if (confirmReject) {
       const batch = writeBatch(db);
+      let tableToLock = null;
+      if (pendingIds.length > 0) {
+        const orderSnap = await getDoc(doc(db, "orders", pendingIds[0]));
+        if (orderSnap.exists()) {
+          tableToLock = orderSnap.data().table_number;
+        }
+      }
       pendingIds.forEach((id) => batch.update(doc(db, "orders", id), { status: "rejected" }));
+      if (tableToLock) {
+        batch.update(doc(db, "tables", tableToLock.toString()), { is_active: false });
+      }
       await batch.commit();
     }
   };
@@ -226,6 +231,21 @@ export default function Kitchen() {
     await batch.commit();
   };
 
+  const toggleItemServed = async (orderId, itemIndex) => {
+    try {
+      const orderRef = doc(db, "orders", orderId);
+      const orderSnap = await getDoc(orderRef);
+      if (orderSnap.exists()) {
+        const orderData = orderSnap.data();
+        let updatedItems = [...orderData.items];
+        updatedItems[itemIndex].served = !updatedItems[itemIndex].served;
+        await updateDoc(orderRef, { items: updatedItems });
+      }
+    } catch (e) {
+      console.error("Failed to update item status:", e);
+    }
+  };
+
   const markWaiterResolved = async (alertId) => {
     const batch = writeBatch(db);
     batch.update(doc(db, "alerts", alertId), { status: "resolved" });
@@ -233,22 +253,46 @@ export default function Kitchen() {
   };
 
   const getTableStatus = (tableNum) => {
+    if (alerts.find(a => a.table_number === tableNum && a.type === "bill")) return { text: "Ready to Pay", bg: "#FFF7ED", color: "#EA580C", border: "#FDBA74" };
     if (alerts.find(a => a.table_number === tableNum && a.type === "waiter")) return { text: "Needs Waiter", bg: "#FFFBEB", color: "#D97706", border: "#FDE68A" };
     if (occupiedTables.includes(tableNum)) return { text: "Dining", bg: "#ECFDF5", color: "#059669", border: "#6EE7B7" };
     if (activeTables[tableNum.toString()]) return { text: "Unlocked (Empty)", bg: "#EFF6FF", color: "#3B82F6", border: "#93C5FD" };
     return { text: "Locked", bg: COLORS.white, color: COLORS.secondaryText, border: "#E5E7EB" };
   };
 
-  const groupedTables = {};
+  // 🚨 NEW LOGIC: Separate Unverified Orders (Pending) from Cooking Orders (Preparing)
+  const groupedPending = {};
+  const groupedPreparing = {};
+
   activeOrders.forEach(order => {
     const t = order.table_number;
-    if (!groupedTables[t]) groupedTables[t] = { table_number: t, pendingIds: [], allIds: [], items: [], notes: [] };
-    groupedTables[t].allIds.push(order.id);
-    if (order.status === "pending") groupedTables[t].pendingIds.push(order.id);
-    order.items.forEach(item => groupedTables[t].items.push({ ...item, isNew: order.status === "pending" }));
-    if (order.special_instructions) groupedTables[t].notes.push(order.special_instructions);
+    
+    // Group 1: Items waiting for approval
+    if (order.status === "pending") {
+      if (!groupedPending[t]) groupedPending[t] = { table_number: t, pendingIds: [], items: [], notes: [] };
+      groupedPending[t].pendingIds.push(order.id);
+      order.items.forEach(item => groupedPending[t].items.push(item));
+      if (order.special_instructions) groupedPending[t].notes.push(order.special_instructions);
+    } 
+    
+    // Group 2: Items actively cooking
+    else if (order.status === "preparing") {
+      if (!groupedPreparing[t]) groupedPreparing[t] = { table_number: t, allIds: [], items: [], notes: [] };
+      groupedPreparing[t].allIds.push(order.id);
+      order.items.forEach((item, index) => {
+        groupedPreparing[t].items.push({ 
+          ...item, 
+          orderId: order.id, 
+          itemIndex: index,
+          served: item.served || false
+        });
+      });
+      if (order.special_instructions) groupedPreparing[t].notes.push(order.special_instructions);
+    }
   });
-  const kitchenQueue = Object.values(groupedTables).sort((a, b) => a.table_number - b.table_number);
+
+  const approvalQueue = Object.values(groupedPending).sort((a, b) => a.table_number - b.table_number);
+  const dispatchQueue = Object.values(groupedPreparing).sort((a, b) => a.table_number - b.table_number);
 
   return (
     <div style={{ padding: "30px", fontFamily: "'Inter', 'Segoe UI', sans-serif", backgroundColor: COLORS.background, minHeight: "100vh" }}>
@@ -276,16 +320,8 @@ export default function Kitchen() {
                 <div key={alert.id} style={{ backgroundColor: "#EFF6FF", borderLeft: `5px solid #3B82F6`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
                   <strong style={{ color: "#1D4ED8", fontSize: "18px" }}>📱 Table {alert.table_number} is requesting the menu!</strong>
                   <div style={{ display: "flex", gap: "10px" }}>
-                    <button 
-                      onClick={() => approveAndUnlock(alert.id, alert.table_number)} 
-                      style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>
-                      Approve & Unlock
-                    </button>
-                    <button 
-                      onClick={() => markWaiterResolved(alert.id)} 
-                      style={{ backgroundColor: "#E5E7EB", color: "#4B5563", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>
-                      Reject (Clear)
-                    </button>
+                    <button onClick={() => approveAndUnlock(alert.id, alert.table_number)} style={{ backgroundColor: "#3B82F6", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Approve & Unlock</button>
+                    <button onClick={() => markWaiterResolved(alert.id)} style={{ backgroundColor: "#E5E7EB", color: "#4B5563", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Reject (Clear)</button>
                   </div>
                 </div>
               );
@@ -296,6 +332,18 @@ export default function Kitchen() {
                 <div key={alert.id} style={{ backgroundColor: "#FFFBEB", borderLeft: `5px solid #F59E0B`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
                   <strong style={{ color: "#D97706", fontSize: "18px" }}>🔔 Table {alert.table_number} needs a waiter!</strong>
                   <button onClick={() => markWaiterResolved(alert.id)} style={{ backgroundColor: "#F59E0B", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Mark Resolved</button>
+                </div>
+              );
+            }
+
+            if (alert.type === "bill") {
+              return (
+                <div key={alert.id} style={{ backgroundColor: "#FFF7ED", borderLeft: `5px solid #EA580C`, padding: "15px 20px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
+                  <strong style={{ color: "#EA580C", fontSize: "18px" }}>💰 Table {alert.table_number} is ready for the bill!</strong>
+                  <div style={{ display: "flex", gap: "10px" }}>
+                    <button onClick={() => printBill(alert.table_number)} style={{ backgroundColor: "#475e94", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>🖨️ Print</button>
+                    <button onClick={() => settleBill(alert.table_number)} style={{ backgroundColor: "#10B981", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>💰 Settle</button>
+                  </div>
                 </div>
               );
             }
@@ -325,8 +373,8 @@ export default function Kitchen() {
                   
                   {isOccupied && (
                     <div style={{ display: "flex", flexDirection: "row", gap: "5px", marginTop: "auto" }}>
-                      <button onClick={() => printBill(tableNum)} style={{ backgroundColor: "#475e94", color: "white", border: "none", padding: "9px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>🖨️ Print</button>
-                      <button onClick={() => settleBill(tableNum)} style={{ backgroundColor: "#475e94", color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px" }}>💰 Settle</button>
+                      <button onClick={() => printBill(tableNum)} style={{ backgroundColor: "#475e94", color: "white", border: "none", padding: "9px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold", fontSize: "13px", flex: 1 }}>🖨️ Print</button>
+                      <button onClick={() => settleBill(tableNum)} style={{ backgroundColor: "#10B981", color: "white", border: "none", padding: "8px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px", flex: 1 }}>💰 Settle</button>
                     </div>
                   )}
 
@@ -342,51 +390,99 @@ export default function Kitchen() {
             })}
           </div>
 
-          <h2 style={{ color: COLORS.primaryText, marginBottom: "20px", fontSize: "20px" }}>Kitchen Dispatch Queue</h2>
-          <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
-            {kitchenQueue.length === 0 && (
-              <div style={{ backgroundColor: COLORS.white, padding: "40px", borderRadius: "16px", width: "100%", textAlign: "center", border: `2px dashed ${COLORS.secondaryText}` }}>
-                <h3 style={{ color: COLORS.secondaryText, margin: 0 }}>No active orders. Kitchen is clear! 🎉</h3>
+          {/* 🚨 ZONE 1: VERIFICATION INBOX */}
+          {approvalQueue.length > 0 && (
+            <div style={{ marginBottom: "40px", padding: "20px", backgroundColor: "#FFFBEB", borderRadius: "16px", border: "2px dashed #F59E0B" }}>
+              <h2 style={{ color: "#D97706", margin: "0 0 20px 0", fontSize: "20px" }}>⚠️ New Orders Pending Verification</h2>
+              <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
+                {approvalQueue.map((tableGroup) => (
+                  <div key={tableGroup.table_number} style={{ border: `2px solid #F59E0B`, borderRadius: "16px", padding: "20px", width: "300px", backgroundColor: COLORS.white, boxShadow: "0 8px 20px rgba(245,158,11,0.15)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
+                      <h3 style={{ margin: 0, color: COLORS.white, backgroundColor: "#F59E0B", padding: "6px 14px", borderRadius: "8px", fontSize: "18px" }}>Table {tableGroup.table_number}</h3>
+                      <span style={{ color: "#D97706", fontSize: "12px", fontWeight: "bold", animation: "pulse 2s infinite" }}>Review Order</span>
+                    </div>
+                    
+                    <ul style={{ paddingLeft: "0", margin: "0 0 15px 0", listStyle: "none", flexGrow: 1 }}>
+                      {tableGroup.items.map((item, index) => (
+                        <li key={index} style={{ fontSize: "16px", marginBottom: "12px", color: COLORS.primaryText, display: "flex", alignItems: "center", gap: "10px" }}>
+                          <strong style={{ color: COLORS.secondaryText, fontSize: "18px" }}>{item.qty}x</strong> 
+                          <span style={{ fontWeight: "600" }}>{item.name}</span>
+                        </li>
+                      ))}
+                    </ul>
+
+                    {tableGroup.notes.length > 0 && (
+                      <div style={{ backgroundColor: "#FEF3C7", padding: "12px", borderRadius: "8px", marginBottom: "20px", fontSize: "13px", color: "#D97706", borderLeft: "4px solid #D97706" }}>
+                        <strong>📝 Notes:</strong> {tableGroup.notes.join(" | ")}
+                      </div>
+                    )}
+
+                    <div style={{ display: "flex", gap: "10px" }}>
+                      <button onClick={() => acceptNewItems(tableGroup.pendingIds)} style={{ flex: 1, padding: "12px", backgroundColor: "#10B981", color: "white", border: "none", borderRadius: "8px", fontSize: "15px", cursor: "pointer", fontWeight: "bold" }}>✓ Accept</button>
+                      <button onClick={() => rejectNewItems(tableGroup.pendingIds)} style={{ flex: 1, padding: "12px", backgroundColor: "#DC2626", color: "white", border: "none", borderRadius: "8px", fontSize: "15px", cursor: "pointer", fontWeight: "bold" }}>❌ Reject</button>
+                    </div>
+                  </div>
+                ))}
               </div>
-            )}
-            
-            {kitchenQueue.map((tableGroup) => {
-              const hasNewItems = tableGroup.pendingIds.length > 0;
-              return (
-                <div key={tableGroup.table_number} style={{ border: `1px solid ${hasNewItems ? '#F59E0B' : '#E5E7EB'}`, borderRadius: "16px", padding: "20px", width: "300px", backgroundColor: COLORS.ticketBg, display: "flex", flexDirection: "column", boxShadow: hasNewItems ? "0 0 15px rgba(245, 158, 11, 0.3)" : "0 8px 20px rgba(0,0,0,0.04)" }}>
+            </div>
+          )}
+
+          {/* 🚨 ZONE 2: ACTIVE KITCHEN DISPATCH (COOKING) */}
+          <h2 style={{ color: COLORS.primaryText, marginBottom: "20px", fontSize: "20px" }}>Kitchen Dispatch Queue (Cooking)</h2>
+          <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
+            {dispatchQueue.length === 0 ? (
+              <div style={{ backgroundColor: COLORS.white, padding: "40px", borderRadius: "16px", width: "100%", textAlign: "center", border: `2px dashed ${COLORS.secondaryText}` }}>
+                <h3 style={{ color: COLORS.secondaryText, margin: 0 }}>No active orders cooking. Kitchen is clear! 🎉</h3>
+              </div>
+            ) : (
+              dispatchQueue.map((tableGroup) => (
+                <div key={tableGroup.table_number} style={{ border: `1px solid #E5E7EB`, borderRadius: "16px", padding: "20px", width: "300px", backgroundColor: COLORS.ticketBg, display: "flex", flexDirection: "column", boxShadow: "0 8px 20px rgba(0,0,0,0.04)" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
                     <h3 style={{ margin: 0, color: COLORS.white, backgroundColor: COLORS.primaryText, padding: "6px 14px", borderRadius: "8px", fontSize: "18px" }}>Table {tableGroup.table_number}</h3>
-                    {hasNewItems && <span style={{ color: "#D97706", fontSize: "12px", fontWeight: "bold", backgroundColor: "#FEF3C7", padding: "4px 8px", borderRadius: "6px", animation: "pulse 2s infinite" }}>New Additions!</span>}
                   </div>
                   
                   <ul style={{ paddingLeft: "0", margin: "0 0 15px 0", listStyle: "none", flexGrow: 1 }}>
                     {tableGroup.items.map((item, index) => (
-                      <li key={index} style={{ fontSize: "16px", marginBottom: "12px", color: COLORS.primaryText, display: "flex", alignItems: "center", gap: "10px" }}>
-                        <strong style={{ color: COLORS.secondaryText, fontSize: "18px" }}>{item.qty}x</strong> 
-                        <span style={{ fontWeight: item.isNew ? "800" : "500" }}>{item.name}</span>
-                        {item.isNew && <span style={{ backgroundColor: "#F59E0B", color: "white", fontSize: "10px", padding: "2px 6px", borderRadius: "10px", fontWeight: "bold" }}>NEW</span>}
+                      <li key={index} style={{ 
+                        fontSize: "16px", 
+                        marginBottom: "12px", 
+                        color: item.served ? COLORS.secondaryText : COLORS.primaryText, 
+                        display: "flex", 
+                        alignItems: "center", 
+                        gap: "10px",
+                        textDecoration: item.served ? "line-through" : "none",
+                        opacity: item.served ? 0.6 : 1
+                      }}>
+                        <button 
+                          onClick={() => toggleItemServed(item.orderId, item.itemIndex)}
+                          style={{
+                            minWidth: "26px", height: "26px", borderRadius: "50%",
+                            border: item.served ? "none" : "2px solid #D1D5DB",
+                            backgroundColor: item.served ? "#10B981" : "transparent",
+                            color: "white", display: "flex", alignItems: "center",
+                            justifyContent: "center", cursor: "pointer", padding: 0, fontWeight: "bold"
+                          }}
+                        >
+                          {item.served ? "✓" : ""}
+                        </button>
+                        <strong style={{ color: item.served ? COLORS.secondaryText : COLORS.secondaryText, fontSize: "18px" }}>{item.qty}x</strong> 
+                        <span style={{ fontWeight: "500" }}>{item.name}</span>
                       </li>
                     ))}
                   </ul>
 
                   {tableGroup.notes.length > 0 && (
-                    <div style={{ backgroundColor: "#FEF3C7", padding: "12px", borderRadius: "8px", marginBottom: "20px", fontSize: "13px", color: "#D97706", borderLeft: "4px solid #D97706" }}>
+                    <div style={{ backgroundColor: "#F3F4F6", padding: "12px", borderRadius: "8px", marginBottom: "20px", fontSize: "13px", color: "#4B5563", borderLeft: "4px solid #9CA3AF" }}>
                       <strong>📝 Notes:</strong> {tableGroup.notes.join(" | ")}
                     </div>
                   )}
 
-                  {hasNewItems ? (
-                    <div style={{ display: "flex", gap: "10px" }}>
-                      <button onClick={() => acceptNewItems(tableGroup.pendingIds)} style={{ flex: 1, padding: "15px", backgroundColor: "#F59E0B", color: "white", border: "none", borderRadius: "10px", fontSize: "15px", cursor: "pointer", fontWeight: "bold" }}>👨‍🍳 Accept</button>
-                      <button onClick={() => rejectNewItems(tableGroup.pendingIds)} style={{ flex: 1, padding: "15px", backgroundColor: "#DC2626", color: "white", border: "none", borderRadius: "10px", fontSize: "15px", cursor: "pointer", fontWeight: "bold" }}>❌ Reject</button>
-                    </div>
-                  ) : (
-                    <button onClick={() => markTableServed(tableGroup.allIds)} style={{ width: "100%", padding: "15px", backgroundColor: COLORS.success, color: "white", border: "none", borderRadius: "10px", fontSize: "16px", cursor: "pointer", fontWeight: "bold" }}>✓ Mark Table Served</button>
-                  )}
+                  <button onClick={() => markTableServed(tableGroup.allIds)} style={{ width: "100%", padding: "15px", backgroundColor: COLORS.success, color: "white", border: "none", borderRadius: "10px", fontSize: "16px", cursor: "pointer", fontWeight: "bold" }}>✓ Mark Table Served</button>
                 </div>
-              );
-            })}
+              ))
+            )}
           </div>
+
         </div>
       )}
 

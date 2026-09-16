@@ -41,7 +41,7 @@ const COLORS = {
   secondaryText: "#666666",  // Clear gray
   blinkitYellow: "#F8CB46",  // The iconic yellow
   blinkitGreen: "#0C831F",   // The iconic green
-  white: "#0c0c0c", 
+  white: "#FFFFFF", 
   border: "#E8E8E8"
 };
 
@@ -69,6 +69,7 @@ export default function App() {
   const [unlockRequested, setUnlockRequested] = useState(false);
 
   const [waiterCalled, setWaiterCalled] = useState(false);
+  const [billRequested, setBillRequested] = useState(false); // 🚨 Added state to track bill request
   const [crowdStatus, setCrowdStatus] = useState({ text: "Low", time: "10 mins" });
   const [outOfStock, setOutOfStock] = useState([]);
   const [tableOrders, setTableOrders] = useState([]); 
@@ -78,10 +79,14 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
 
-  useEffect(() => {
+useEffect(() => {
     const urlCheck = new URL(window.location.href);
     if (urlCheck.searchParams.get("portal") !== "admin") {
-      signInAnonymously(auth).catch(console.error);
+      // 🚨 ADDED ALERT HERE to catch anonymous login failures:
+      signInAnonymously(auth).catch((error) => {
+        alert("MOBILE ERROR (Auth): " + error.code + " | " + error.message);
+        console.error(error);
+      });
     }
 
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -125,8 +130,13 @@ export default function App() {
               setTableNumber(data.table_number); 
               window.history.replaceState({}, document.title, "/Digi-QR-Menu/");          
              }
+          } else {
+             // 🚨 ADDED ALERT HERE for bad QR codes:
+             alert("MOBILE ERROR: Invalid QR token or Table does not exist in DB.");
           }
         } catch (error) {
+          // 🚨 ADDED ALERT HERE to catch Firestore permission blocks:
+          alert("MOBILE ERROR (Database): " + error.code + " | " + error.message);
           console.error("Security check failed:", error);
         }
       } else {
@@ -222,6 +232,24 @@ export default function App() {
     setTimeout(() => setWaiterCalled(false), 5000); 
   };
 
+  // 🚨 NEW FEATURE: Request Bill Function
+  const requestBill = async () => {
+    try {
+      setBillRequested(true);
+      await addDoc(collection(db, "alerts"), {
+        restaurant_id: "mysuru_cafe",
+        table_number: parseInt(tableNumber),
+        type: "bill",
+        status: "active",
+        created_at: serverTimestamp()
+      });
+      alert("We are fetching your bill! A waiter will be there shortly. 🛎️");
+    } catch (error) {
+      console.error("Failed to request bill:", error);
+      setBillRequested(false);
+    }
+  };
+
   const submitFeedback = async (rating) => {
     await addDoc(collection(db, "feedbacks"), { restaurant_id: "mysuru_cafe", table_number: parseInt(tableNumber), rating: rating, created_at: serverTimestamp() });
     setFeedbackSubmitted(true);
@@ -279,6 +307,7 @@ export default function App() {
       if (userCredential.user.email === "owner@mysurucafe.com") setView("owner");
       else if (userCredential.user.email === "kitchen@mysurucafe.com") setView("kitchen");
     } catch (error) {
+      console.error("FIREBASE ERROR:", error.code, error.message);
       setLoginError("Invalid credentials.");
     } finally { setIsSubmitting(false); }
   };
@@ -291,8 +320,8 @@ export default function App() {
             <h2 style={{ margin: "0 0 5px 0", color: COLORS.primaryText, fontSize: "24px", fontWeight: "800" }}>Staff Portal</h2>
           </div>
           {loginError && (<div style={{ color: "#DC2626", fontSize: "14px", marginBottom: "20px", textAlign: "center", fontWeight: "600" }}>{loginError}</div>)}
-          <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required style={{ width: "100%", padding: "14px", marginBottom: "15px", borderRadius: "8px", border: `1px solid ${COLORS.border}`, boxSizing: "border-box", fontSize: "15px", fontWeight: "500", backgroundColor: "#F9FAFB", outline: "none" }} />
-          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ width: "100%", padding: "14px", marginBottom: "25px", borderRadius: "8px", border: `1px solid ${COLORS.border}`, boxSizing: "border-box", fontSize: "15px", fontWeight: "500", backgroundColor: "#F9FAFB", outline: "none" }} />
+          <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required style={{ width: "100%", padding: "14px", marginBottom: "15px", borderRadius: "8px", border: `1px solid ${COLORS.border}`, boxSizing: "border-box", fontSize: "15px", fontWeight: "500", backgroundColor: "#050606", outline: "none" }} />
+          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ width: "100%", padding: "14px", marginBottom: "25px", borderRadius: "8px", border: `1px solid ${COLORS.border}`, boxSizing: "border-box", fontSize: "15px", fontWeight: "500", backgroundColor: "#050606", outline: "none" }} />
           <button type="submit" disabled={isSubmitting} style={{ width: "100%", backgroundColor: COLORS.blinkitGreen, color: "white", padding: "16px", border: "none", borderRadius: "8px", fontSize: "16px", fontWeight: "800", cursor: "pointer" }}>
             {isSubmitting ? "Verifying..." : "Login"}
           </button>
@@ -307,16 +336,41 @@ export default function App() {
   if (!tableNumber && view === "customer") {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", backgroundColor: COLORS.background, fontFamily: "'Inter', sans-serif" }}>
-        <h2 style={{ color: COLORS.primaryText, marginBottom: "10px", fontSize: "24px", fontWeight: "800" }}>Tap NFC Tag</h2>
-        <p style={{ color: COLORS.secondaryText, fontSize: "15px", fontWeight: "500" }}>Or scan the QR code on your table.</p>
+        <h2 style={{ color: COLORS.primaryText, marginBottom: "10px", fontSize: "24px", fontWeight: "800" }}>🛜📱 Tap NFC Tag</h2>
       </div>
     );
   }
 
   if (isCheckingTable && tableNumber) {
     return (
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", backgroundColor: COLORS.background, fontFamily: "'Inter', sans-serif" }}>
-        <h3 style={{ color: COLORS.primaryText, fontSize: "16px", fontWeight: "600" }}>Connecting to Table {tableNumber}...</h3>
+      <div className="premium-nfc-wrapper">
+        <div className="premium-nfc-card">
+          
+          {/* Elegant Brand Header */}
+          <h1 className="restaurant-title">Mysuru Cafe</h1>
+    
+          {/* Pulsing Emoji Graphic */}
+          <div className="icon-stage">
+            <div className="pulse-ring"></div>
+            <div className="pulse-ring delay"></div>
+            <div className="icon-circle">🛜📱</div>
+          </div>
+    
+          {/* Clear, bold instructions */}
+          <h2 className="nfc-heading">Connecting...</h2>
+          <p className="nfc-subtitle">
+            Connecting to Table {tableNumber}. Please hold your phone near the NFC sticker to view the menu.
+          </p>
+    
+          <div className="nfc-divider"></div>
+    
+          {/* Subtle fallback instruction */}
+          <p className="nfc-fallback">
+            Camera not picking it up? <br/>
+            Scan the QR code instead.
+          </p>
+          
+        </div>
       </div>
     );
   }
@@ -370,19 +424,26 @@ export default function App() {
     );
   }
 
-  if (showBill) {
+ if (showBill) {
     return (
-      <div style={{ backgroundColor: COLORS.background, minHeight: "100vh", padding: "20px", fontFamily: "'Inter', sans-serif" }}>
+      <div style={{ background: "linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)", minHeight: "100vh", padding: "20px", fontFamily: "'Inter', sans-serif" }}>
+        
+        {/* Back Button */}
         <button onClick={() => setShowBill(false)} style={{ backgroundColor: "transparent", border: "none", fontSize: "24px", cursor: "pointer", color: COLORS.primaryText, marginBottom: "15px", fontWeight: "900" }}>←</button>
-        <div style={{ backgroundColor: COLORS.white, padding: "20px", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.05)", maxWidth: "400px", margin: "0 auto" }}>
-          <h2 style={{ color: COLORS.primaryText, margin: "0 0 5px 0", fontWeight: "900", fontSize: "22px" }}>Mysore Cafe</h2>
-          <p style={{ color: COLORS.secondaryText, margin: "0 0 20px 0", fontWeight: "600", fontSize: "14px" }}>Table {tableNumber} • Bill</p>
-          <hr style={{ borderTop: `1px dashed ${COLORS.border}`, marginBottom: "20px" }} />
+        
+        {/* Premium Dark Bill Card */}
+        <div style={{ backgroundColor: "#1A1A1A", padding: "25px", borderRadius: "16px", boxShadow: "0 10px 25px rgba(0,0,0,0.15)", maxWidth: "400px", margin: "0 auto" }}>
+          
+          <h2 style={{ color: "#FFFFFF", margin: "0 0 5px 0", fontWeight: "900", fontSize: "24px", letterSpacing: "-0.5px" }}>Mysore Cafe</h2>
+          <p style={{ color: "#A3A3A3", margin: "0 0 20px 0", fontWeight: "600", fontSize: "14px" }}>Table {tableNumber} • Digital Receipt</p>
+          
+          <hr style={{ borderTop: `1px dashed #404040`, marginBottom: "20px" }} />
+          
           <div style={{ textAlign: "left", marginBottom: "20px" }}>
             {tableOrders.map((order) => (
               <div key={order.id} style={{ marginBottom: "15px" }}>
                 {order.items.map((item, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px", color: COLORS.primaryText, fontWeight: "600", fontSize: "15px" }}>
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", color: "#FFFFFF", fontWeight: "600", fontSize: "15px" }}>
                     <span>{item.qty} x {item.name}</span>
                     <span>₹{item.price * item.qty}</span>
                   </div>
@@ -390,11 +451,29 @@ export default function App() {
               </div>
             ))}
           </div>
-          <hr style={{ borderTop: `1px dashed ${COLORS.border}`, marginBottom: "20px" }} />
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "20px", fontWeight: "900", color: COLORS.primaryText, marginBottom: "20px" }}>
+          
+          <hr style={{ borderTop: `1px dashed #404040`, marginBottom: "20px" }} />
+          
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "22px", fontWeight: "900", color: "#FFFFFF", marginBottom: "20px" }}>
             <span>Total to pay</span>
-            <span>₹{calculateGrandTotal()}</span>
+            <span style={{ color: COLORS.blinkitGreen }}>₹{calculateGrandTotal()}</span>
           </div>
+          
+          {/* 🚨 THE NEW READY TO PAY BUTTON 🚨 */}
+          <button 
+            onClick={requestBill} 
+            disabled={billRequested}
+            style={{ 
+              width: "100%", padding: "16px", 
+              backgroundColor: billRequested ? "#4B5563" : "#EA580C", // Turns grey when clicked
+              color: "white", border: "none", borderRadius: "12px", fontSize: "16px", 
+              fontWeight: "bold", cursor: billRequested ? "not-allowed" : "pointer", 
+              boxShadow: billRequested ? "none" : "0 4px 15px rgba(234, 88, 12, 0.3)",
+              transition: "0.2s"
+            }}>
+            {billRequested ? "✓ Waiter Notified" : "🛎️ Ready to Pay (Call Waiter)"}
+          </button>
+          
         </div>
       </div>
     );
@@ -541,7 +620,7 @@ export default function App() {
               ))}
             </div>
 
-           <div style={{ backgroundColor: "white", padding: "15px", borderRadius: "12px", marginBottom: "15px" }}>
+            <div style={{ backgroundColor: "white", padding: "15px", borderRadius: "12px", marginBottom: "15px" }}>
               <textarea 
                 value={cookingInstructions} 
                 onChange={(e) => setCookingInstructions(e.target.value)} 
@@ -570,9 +649,10 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{ position: "fixed", bottom: 0, left: 0, width: "100%", backgroundColor: "white", padding: "15px", borderTop: `1px solid ${COLORS.border}` }}>
-            <div style={{ maxWidth: "480px", margin: "0 auto" }}>
-              <button onClick={placeOrder} disabled={isSubmitting || cart.length === 0} style={{ width: "100%", backgroundColor: COLORS.blinkitGreen, color: "white", padding: "16px", border: "none", borderRadius: "10px", fontSize: "16px", fontWeight: "800", cursor: "pointer" }}>
+          {/* 🚨 THE OVERFLOW FIX IS RIGHT HERE 🚨 */}
+          <div style={{ position: "fixed", bottom: 0, left: 0, width: "100%", boxSizing: "border-box", backgroundColor: "white", padding: "15px", borderTop: `1px solid ${COLORS.border}` }}>
+            <div style={{ maxWidth: "480px", margin: "0 auto", boxSizing: "border-box" }}>
+              <button onClick={placeOrder} disabled={isSubmitting || cart.length === 0} style={{ width: "100%", boxSizing: "border-box", backgroundColor: COLORS.blinkitGreen, color: "white", padding: "16px", border: "none", borderRadius: "10px", fontSize: "16px", fontWeight: "800", cursor: "pointer" }}>
                 {isSubmitting ? "Sending..." : "Place Order at Table"}
               </button>
             </div>
