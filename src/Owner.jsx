@@ -2,8 +2,8 @@ import { useState, useEffect } from "react";
 import { signOut } from "firebase/auth";
 import { auth, db } from "./firebase";
 import { collection, query, where, onSnapshot, getDocs, doc, writeBatch } from "firebase/firestore";
-import jsPDF from "jspdf";
-import "jspdf-autotable";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 
 const COLORS = { 
   background: "#F9FAFB", primaryText: "#111827", secondaryText: "#6B7280", 
@@ -114,31 +114,52 @@ export default function Owner() {
 
   // --- PDF GENERATION GENERATOR ---
   const downloadMonthPDF = (monthData) => {
-    const doc = new jsPDF();
-    
-    // Header
-    doc.setFontSize(22);
-    doc.setTextColor(40);
-    doc.text("Mysuru Cafe - Sales Report", 14, 22);
-    
-    doc.setFontSize(14);
-    doc.setTextColor(100);
-    doc.text(`Month: ${monthData.label}`, 14, 32);
-    doc.text(`Total Orders: ${monthData.orderCount}  |  Total Revenue: Rs. ${monthData.totalRevenue.toLocaleString()}`, 14, 40);
+    try {
+      const doc = new jsPDF();
+      
+      // Header
+      doc.setFontSize(22);
+      doc.setTextColor(40);
+      doc.text("Mysuru Cafe - Sales Report", 14, 22);
+      
+      doc.setFontSize(14);
+      doc.setTextColor(100);
+      doc.text(`Month: ${monthData.label}`, 14, 32);
+      doc.text(`Total Orders: ${monthData.orderCount}  |  Total Revenue: Rs. ${monthData.totalRevenue.toLocaleString()}`, 14, 40);
 
-    // Table Data
-    const tableColumn = ["Date", "Time", "Table", "Items Ordered", "Total (Rs)"];
-    const tableRows = [];
+      // Table Data
+      const tableColumn = ["Date", "Time", "Table", "Items Ordered", "Total (Rs)"];
+      const tableRows = [];
 
-    monthData.orders.forEach(order => {
-      tableRows.push([
-        order.date,
-        order.time,
-        order.table,
-        order.items,
-        order.total
-      ]);
-    });
+      monthData.orders.forEach(order => {
+        tableRows.push([
+          order.date,
+          order.time,
+          order.table,
+          order.items,
+          order.total
+        ]);
+      });
+
+      // 🚨 THE FIX: Use autoTable as a standalone function and pass 'doc' into it
+      autoTable(doc, {
+        startY: 48,
+        head: [tableColumn],
+        body: tableRows,
+        theme: 'grid',
+        headStyles: { fillColor: [15, 23, 42] },
+        styles: { fontSize: 10, cellPadding: 4 },
+        columnStyles: { 3: { cellWidth: 80 } } 
+      });
+
+      // Save File
+      doc.save(`MysuruCafe_Report_${monthData.label.replace(" ", "_")}.pdf`);
+      
+    } catch (error) {
+      console.error("PDF Generation Error:", error);
+      alert("Something went wrong while generating the PDF. Check the console.");
+    }
+  };
 
     // AutoTable Plugin
     doc.autoTable({
