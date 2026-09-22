@@ -1,266 +1,311 @@
-import { signOut } from "firebase/auth";
-import { auth } from "./firebase";
 import { useState, useEffect } from "react";
-import { collection, query, where, onSnapshot } from "firebase/firestore";
-import { db } from "./firebase";
+import { signOut } from "firebase/auth";
+import { auth, db } from "./firebase";
+import { collection, query, where, onSnapshot, getDocs, doc, writeBatch } from "firebase/firestore";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
 
-// Added 'accent' color for the Rejected UI elements
-const COLORS = { background: "#F9FAFB", primaryText: "#111827", secondaryText: "#6B7280", success: "#10B981", accent: "#E63946", white: "#FFFFFF" };
+const COLORS = { 
+  background: "#F9FAFB", primaryText: "#111827", secondaryText: "#6B7280", 
+  success: "#10B981", danger: "#DC2626", white: "#FFFFFF", cardBg: "#FFFFFF", border: "#E5E7EB"
+};
+
+const TOTAL_TABLES = [1, 2, 3, 4, 5, 6];
 
 export default function Owner() {
-  const [activeTab, setActiveTab] = useState("overview"); 
-  const [stats, setStats] = useState({ active: 0, completedToday: 0, revenueToday: 0, rejectedToday: 0 }); // Added rejectedToday
-  const [topItems, setTopItems] = useState([]); // New state for Top Sellers
-  const [groupedOrders, setGroupedOrders] = useState({});
-  const [ratingStat, setRatingStat] = useState({ average: "0.0", count: 0 });
-  const [feedbacksList, setFeedbacksList] = useState([]); 
+  const [activeTab, setActiveTab] = useState("today");
+  const [dailyRevenue, setDailyRevenue] = useState(0);
+  const [totalOrders, setTotalOrders] = useState(0);
+  const [popularItems, setPopularItems] = useState([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  
+  // History State
+  const [monthlyHistory, setMonthlyHistory] = useState({});
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 
   const handleLogout = async () => {
     await signOut(auth);
-    // 🚨 IMPORTANT: Include the repo name in the path!
-    window.location.href = "/Digi-QR-Menu/?portal=admin"; 
+    window.location.href = "/Digi-QR-Menu/?portal=admin";
   };
 
-useEffect(() => {
-    const qOrders = query(collection(db, "orders"), where("restaurant_id", "==", "mysuru_cafe"));
-    const unsubOrders = onSnapshot(qOrders, (snapshot) => {
-      let activeCount = 0; let totalRevenueToday = 0; let rejectedTodayCount = 0;
-      const historyGroups = {}; 
-      const itemTally = {}; 
+  useEffect(() => {
+    // --- LISTENER 1: LIVE TODAY'S REVENUE ---
+    const qLiveOrders = query(collection(db, "orders"), where("restaurant_id", "==", "mysuru_cafe"));
+    const unsubLive = onSnapshot(qLiveOrders, (snapshot) => {
+      let revenue = 0;
+      let orderCount = 0;
+      const itemCounts = {};
       const todayString = new Date().toDateString();
-      
-      // We need this to look up today's grouped bills later
-      const todayHeader = new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-      const rawOrders = [];
-      snapshot.forEach((document) => rawOrders.push({ id: document.id, ...document.data() }));
-      rawOrders.sort((a, b) => (a.created_at?.toMillis() || 0) - (b.created_at?.toMillis() || 0));
-
-      rawOrders.forEach((data) => {
-        const orderTotal = data.items.reduce((sum, item) => sum + (item.price * (item.qty || 1)), 0);
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
         const orderDateObj = data.created_at ? data.created_at.toDate() : new Date();
-        const isToday = orderDateObj.toDateString() === todayString;
-        const dateHeader = orderDateObj.toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-
-        if (data.status === "pending" || data.status === "preparing") activeCount++;
         
-        if (data.status === "rejected" && isToday) {
-          rejectedTodayCount++;
+        if (data.status === "paid" && orderDateObj.toDateString() === todayString) {
+          revenue += (data.total_price || 0);
+          orderCount++;
+          if (data.items && Array.isArray(data.items)) {
+            data.items.forEach(item => {
+              if (itemCounts[item.name]) {
+                itemCounts[item.name].qty += item.qty;
+              } else {
+                itemCounts[item.name] = { name: item.name, qty: item.qty };
+              }
+            });
+          }
         }
+      });
 
-        if ((data.status === "completed" || data.status === "paid") && isToday) {
-          totalRevenueToday += orderTotal;
+      const sortedItems = Object.values(itemCounts).sort((a, b) => b.qty - a.qty).slice(0, 5);
+      setDailyRevenue(revenue);
+      setTotalOrders(orderCount);
+      setPopularItems(sortedItems);
+    });
+
+    // --- LISTENER 2: FULL HISTORY CLASSIFICATION ---
+    const unsubHistory = onSnapshot(qLiveOrders, (snapshot) => {
+      const historyByMonth = {};
+      
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.status === "paid" && data.created_at) {
+          const dateObj = data.created_at.toDate();
+          // Format: "September 2026"
+          const monthYear = dateObj.toLocaleString('default', { month: 'long', year: 'numeric' });
+          const sortKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}`; // For sorting
+
+          if (!historyByMonth[monthYear]) {
+            historyByMonth[monthYear] = { 
+              label: monthYear, 
+              sortKey: sortKey, 
+              totalRevenue: 0, 
+              orderCount: 0, 
+              orders: [] 
+            };
+          }
+
+          historyByMonth[monthYear].totalRevenue += (data.total_price || 0);
+          historyByMonth[monthYear].orderCount += 1;
           
-          data.items.forEach(item => {
-            itemTally[item.name] = (itemTally[item.name] || 0) + (item.qty || 1);
+          // Format items cleanly for the PDF
+          const itemsString = data.items.map(i => `${i.qty}x ${i.name}`).join(", ");
+          
+          historyByMonth[monthYear].orders.push({
+            date: dateObj.toLocaleDateString(),
+            time: dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            table: data.table_number,
+            items: itemsString,
+            total: data.total_price || 0
           });
         }
-
-        if (!historyGroups[dateHeader]) historyGroups[dateHeader] = {};
-
-        const sessionId = data.meal_session_id || data.id;
-
-        if (historyGroups[dateHeader][sessionId]) {
-          historyGroups[dateHeader][sessionId].total += orderTotal;
-          if (data.status !== "paid" && data.status !== "completed") {
-            historyGroups[dateHeader][sessionId].status = data.status;
-          }
-        } else {
-          historyGroups[dateHeader][sessionId] = { 
-            id: sessionId, 
-            table_number: data.table_number,
-            total: orderTotal, 
-            dateObj: orderDateObj, 
-            status: data.status 
-          };
-        }
       });
 
-      // 🚨 NEW LOGIC: Count unique BILLS (sessions) for today instead of individual orders
-      let completedBillsCount = 0;
-      if (historyGroups[todayHeader]) {
-        Object.values(historyGroups[todayHeader]).forEach(session => {
-          if (session.status === "paid" || session.status === "completed") {
-            completedBillsCount++;
-          }
-        });
-      }
-
-      const sortedItems = Object.keys(itemTally)
-        .map(name => ({ name, qty: itemTally[name] }))
-        .sort((a, b) => b.qty - a.qty)
-        .slice(0, 5);
-      setTopItems(sortedItems);
-
-      const finalGrouped = {};
-      Object.keys(historyGroups).forEach(date => {
-        finalGrouped[date] = Object.values(historyGroups[date]).sort((a, b) => b.dateObj.getTime() - a.dateObj.getTime());
+      // Sort orders within each month by date descending
+      Object.values(historyByMonth).forEach(monthGroup => {
+        monthGroup.orders.sort((a, b) => new Date(b.date) - new Date(a.date));
       });
-      
-      // Update stats using the new completedBillsCount
-      setStats({ active: activeCount, completedToday: completedBillsCount, revenueToday: totalRevenueToday, rejectedToday: rejectedTodayCount });
-      setGroupedOrders(finalGrouped);
+
+      setMonthlyHistory(historyByMonth);
+      setIsLoadingHistory(false);
     });
 
-    const qFeedback = query(collection(db, "feedbacks"), where("restaurant_id", "==", "mysuru_cafe"));
-    const unsubFeedback = onSnapshot(qFeedback, (snapshot) => {
-      let totalStars = 0; let reviewCount = 0;
-      const todayString = new Date().toDateString();
-      const allFeedbacks = [];
-
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        const dateObj = data.created_at ? data.created_at.toDate() : new Date();
-        allFeedbacks.push({ id: doc.id, dateObj, ...data });
-        if (dateObj.toDateString() === todayString) { totalStars += data.rating; reviewCount++; }
-      });
-      
-      setRatingStat({ average: reviewCount > 0 ? (totalStars / reviewCount).toFixed(1) : "0.0", count: reviewCount });
-      setFeedbacksList(allFeedbacks);
-    });
-
-    return () => { unsubOrders(); unsubFeedback(); };
+    return () => { unsubLive(); unsubHistory(); };
   }, []);
 
+  // --- PDF GENERATION GENERATOR ---
+  const downloadMonthPDF = (monthData) => {
+    const doc = new jsPDF();
+    
+    // Header
+    doc.setFontSize(22);
+    doc.setTextColor(40);
+    doc.text("Mysuru Cafe - Sales Report", 14, 22);
+    
+    doc.setFontSize(14);
+    doc.setTextColor(100);
+    doc.text(`Month: ${monthData.label}`, 14, 32);
+    doc.text(`Total Orders: ${monthData.orderCount}  |  Total Revenue: Rs. ${monthData.totalRevenue.toLocaleString()}`, 14, 40);
 
-  const getRatingForOrder = (order) => {
-    const orderTime = order.dateObj.getTime();
-    const possibleFeedbacks = feedbacksList.filter(fb => fb.table_number === order.table_number && fb.dateObj && fb.dateObj.getTime() >= orderTime && (fb.dateObj.getTime() - orderTime) < (4 * 60 * 60 * 1000) );
-    if (possibleFeedbacks.length > 0) {
-      possibleFeedbacks.sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime());
-      return possibleFeedbacks[0].rating;
-    }
-    return "-";
+    // Table Data
+    const tableColumn = ["Date", "Time", "Table", "Items Ordered", "Total (Rs)"];
+    const tableRows = [];
+
+    monthData.orders.forEach(order => {
+      tableRows.push([
+        order.date,
+        order.time,
+        order.table,
+        order.items,
+        order.total
+      ]);
+    });
+
+    // AutoTable Plugin
+    doc.autoTable({
+      startY: 48,
+      head: [tableColumn],
+      body: tableRows,
+      theme: 'grid',
+      headStyles: { fillColor: [15, 23, 42] },
+      styles: { fontSize: 10, cellPadding: 4 },
+      columnStyles: { 3: { cellWidth: 80 } } // Give more space to the items column
+    });
+
+    // Save File
+    doc.save(`MysuruCafe_Report_${monthData.label.replace(" ", "_")}.pdf`);
   };
 
-  const sortedDates = Object.keys(groupedOrders).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+  // --- SAFE END OF DAY RESET ---
+  const endOfDayReset = async () => {
+    const confirmReset = window.confirm("This will unlock all tables and clear any hanging alerts. Do this after closing. Continue?");
+    if (!confirmReset) return;
+
+    setIsProcessing(true);
+    try {
+      const batch = writeBatch(db);
+      TOTAL_TABLES.forEach(tableNum => {
+        batch.set(doc(db, "tables", tableNum.toString()), { is_active: false, locked_by: null }, { merge: true });
+      });
+      const activeAlerts = await getDocs(query(collection(db, "alerts"), where("status", "==", "active")));
+      activeAlerts.forEach((alertDoc) => {
+        batch.update(doc(db, "alerts", alertDoc.id), { status: "resolved" });
+      });
+      await batch.commit();
+      alert("✅ End of Day Reset Complete.");
+    } catch (error) {
+      console.error("Reset failed:", error);
+      alert("Failed to reset tables.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   return (
     <div style={{ padding: "30px", fontFamily: "'Inter', 'Segoe UI', sans-serif", backgroundColor: COLORS.background, minHeight: "100vh" }}>
       
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "30px", backgroundColor: COLORS.white, padding: "15px 25px", borderRadius: "16px", boxShadow: "0 4px 15px rgba(0,0,0,0.03)" }}>
+      {/* HEADER */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "30px", backgroundColor: COLORS.white, padding: "20px 30px", borderRadius: "16px", boxShadow: "0 4px 15px rgba(0,0,0,0.03)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "15px" }}>
-          <div style={{ backgroundColor: "#E0E7FF", padding: "10px", borderRadius: "12px" }}>
-            <span style={{ fontSize: "28px" }}>📈</span>
-          </div>
+          <div style={{ backgroundColor: "#EFF6FF", padding: "12px", borderRadius: "12px", fontSize: "28px" }}>📈</div>
           <div>
-            <h1 style={{ margin: 0, color: COLORS.primaryText, fontSize: "28px", fontWeight: "900", letterSpacing: "-0.5px" }}>Executive Dashboard</h1>
-            <p style={{ margin: 0, color: COLORS.secondaryText, fontWeight: "600" }}>Financials & Ledger</p>
+            <h1 style={{ margin: 0, color: COLORS.primaryText, fontSize: "28px", fontWeight: "900", letterSpacing: "-0.5px" }}>Owner Dashboard</h1>
+            <p style={{ margin: 0, color: COLORS.secondaryText, fontWeight: "600" }}>Financials & Reports</p>
           </div>
         </div>
-        <button 
-          onClick={handleLogout} 
-          style={{ backgroundColor: "#FEE2E2", color: "#DC2626", border: "none", padding: "12px 24px", borderRadius: "10px", fontWeight: "bold", fontSize: "15px", cursor: "pointer", transition: "0.2s" }}
-        >
-          Secure Logout
+        <button onClick={handleLogout} style={{ backgroundColor: "#FEE2E2", color: "#DC2626", border: "none", padding: "12px 24px", borderRadius: "10px", fontWeight: "bold", fontSize: "15px", cursor: "pointer" }}>
+          Logout
         </button>
       </div>
 
-      <div style={{ display: "flex", gap: "15px", marginBottom: "30px", borderBottom: `2px solid #E5E7EB`, paddingBottom: "10px" }}>
-        <button onClick={() => setActiveTab("overview")} style={{ backgroundColor: "transparent", border: "none", fontSize: "16px", fontWeight: "bold", cursor: "pointer", color: activeTab === "overview" ? "#4F46E5" : COLORS.secondaryText, borderBottom: activeTab === "overview" ? `3px solid #4F46E5` : "none" }}>📊 Overview</button>
-        <button onClick={() => setActiveTab("history")} style={{ backgroundColor: "transparent", border: "none", fontSize: "16px", fontWeight: "bold", cursor: "pointer", color: activeTab === "history" ? "#4F46E5" : COLORS.secondaryText, borderBottom: activeTab === "history" ? `3px solid #4F46E5` : "none" }}>📁 Order Ledger</button>
+      {/* TABS */}
+      <div style={{ display: "flex", gap: "15px", marginBottom: "30px", borderBottom: `2px solid ${COLORS.border}`, paddingBottom: "10px" }}>
+        <button onClick={() => setActiveTab("today")} style={{ backgroundColor: "transparent", border: "none", fontSize: "16px", fontWeight: "bold", cursor: "pointer", color: activeTab === "today" ? COLORS.primaryText : COLORS.secondaryText, borderBottom: activeTab === "today" ? `3px solid ${COLORS.primaryText}` : "none" }}>📊 Today's Performance</button>
+        <button onClick={() => setActiveTab("history")} style={{ backgroundColor: "transparent", border: "none", fontSize: "16px", fontWeight: "bold", cursor: "pointer", color: activeTab === "history" ? COLORS.primaryText : COLORS.secondaryText, borderBottom: activeTab === "history" ? `3px solid ${COLORS.primaryText}` : "none" }}>📁 Monthly Reports (PDF)</button>
       </div>
 
-      {activeTab === "overview" && (
-        <div>
-          {/* Top 4 Stat Cards */}
-          <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", marginBottom: "30px" }}>
-            <div style={{ backgroundColor: COLORS.white, padding: "25px", borderRadius: "16px", flex: "1", minWidth: "200px", borderTop: `6px solid #4F46E5`, boxShadow: "0 4px 10px rgba(0,0,0,0.03)" }}>
-              <p style={{ margin: "0 0 10px 0", color: COLORS.secondaryText, fontSize: "14px", fontWeight: "bold" }}>TODAY'S REVENUE</p>
-              <h2 style={{ margin: 0, color: COLORS.primaryText, fontSize: "40px" }}>₹{stats.revenueToday}</h2>
+      {activeTab === "today" && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "25px", marginBottom: "40px" }}>
+            {/* REVENUE WIDGET */}
+            <div style={{ backgroundColor: COLORS.cardBg, padding: "25px", borderRadius: "16px", boxShadow: "0 4px 10px rgba(0,0,0,0.03)", borderTop: `4px solid ${COLORS.success}` }}>
+              <h3 style={{ margin: "0 0 10px 0", color: COLORS.secondaryText, fontSize: "16px", textTransform: "uppercase", letterSpacing: "1px" }}>Today's Revenue</h3>
+              <p style={{ margin: 0, fontSize: "42px", fontWeight: "900", color: COLORS.primaryText }}>₹{dailyRevenue.toLocaleString()}</p>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: "15px", paddingTop: "15px", borderTop: "1px solid #E5E7EB" }}>
+                <div>
+                  <span style={{ display: "block", color: COLORS.secondaryText, fontSize: "13px" }}>Completed Orders</span>
+                  <strong style={{ fontSize: "18px", color: COLORS.primaryText }}>{totalOrders}</strong>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <span style={{ display: "block", color: COLORS.secondaryText, fontSize: "13px" }}>Avg. Order Value</span>
+                  <strong style={{ fontSize: "18px", color: COLORS.primaryText }}>₹{totalOrders > 0 ? Math.round(dailyRevenue / totalOrders) : 0}</strong>
+                </div>
+              </div>
             </div>
-            <div style={{ backgroundColor: COLORS.white, padding: "25px", borderRadius: "16px", flex: "1", minWidth: "200px", borderTop: `6px solid ${COLORS.success}`, boxShadow: "0 4px 10px rgba(0,0,0,0.03)" }}>
-            <p style={{ margin: "0 0 10px 0", color: COLORS.secondaryText, fontSize: "14px", fontWeight: "bold" }}>TOTAL BILLS SETTLED</p>
-              <h2 style={{ margin: 0, color: COLORS.primaryText, fontSize: "40px" }}>{stats.completedToday}</h2>
-            </div>
-            <div style={{ backgroundColor: COLORS.white, padding: "25px", borderRadius: "16px", flex: "1", minWidth: "200px", borderTop: `6px solid #F59E0B`, boxShadow: "0 4px 10px rgba(0,0,0,0.03)" }}>
-              <p style={{ margin: "0 0 10px 0", color: COLORS.secondaryText, fontSize: "14px", fontWeight: "bold" }}>CUSTOMER RATING</p>
-              <h2 style={{ margin: 0, color: COLORS.primaryText, fontSize: "40px", display: "flex", alignItems: "center", gap: "10px" }}>
-                ⭐ {ratingStat.average}
-              </h2>
-            </div>
-            {/* NEW: Rejected Orders Card */}
-            <div style={{ backgroundColor: COLORS.white, padding: "25px", borderRadius: "16px", flex: "1", minWidth: "200px", borderTop: `6px solid ${COLORS.accent}`, boxShadow: "0 4px 10px rgba(0,0,0,0.03)" }}>
-              <p style={{ margin: "0 0 10px 0", color: COLORS.secondaryText, fontSize: "14px", fontWeight: "bold" }}>REJECTED GHOSTS</p>
-              <h2 style={{ margin: 0, color: COLORS.accent, fontSize: "40px" }}>{stats.rejectedToday}</h2>
+
+            {/* BEST SELLERS WIDGET */}
+            <div style={{ backgroundColor: COLORS.cardBg, padding: "25px", borderRadius: "16px", boxShadow: "0 4px 10px rgba(0,0,0,0.03)" }}>
+              <h3 style={{ margin: "0 0 20px 0", color: COLORS.secondaryText, fontSize: "16px", textTransform: "uppercase", letterSpacing: "1px" }}>🔥 Top Selling Items (Today)</h3>
+              {popularItems.length === 0 ? (
+                <p style={{ color: COLORS.secondaryText, fontStyle: "italic" }}>No sales data yet for today.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  {popularItems.map((item, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <span style={{ backgroundColor: "#F3F4F6", padding: "4px 10px", borderRadius: "6px", fontWeight: "bold", fontSize: "14px", color: COLORS.primaryText }}>#{i + 1}</span>
+                        <span style={{ fontWeight: "600", color: COLORS.primaryText }}>{item.name}</span>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <span style={{ fontWeight: "800", color: COLORS.success, display: "block" }}>{item.qty} sold</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
-          {/* NEW: Top Sellers Section */}
-          <div style={{ backgroundColor: COLORS.white, padding: "30px", borderRadius: "16px", boxShadow: "0 4px 10px rgba(0,0,0,0.03)", maxWidth: "600px" }}>
-            <h3 style={{ margin: "0 0 20px 0", color: COLORS.primaryText, fontSize: "20px", fontWeight: "800" }}>🏆 Top Selling Items Today</h3>
-            {topItems.length === 0 ? (
-              <p style={{ color: COLORS.secondaryText, fontStyle: "italic" }}>No items sold yet today.</p>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
-                {topItems.map((item, index) => (
-                  <div key={index} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "15px", borderBottom: index !== topItems.length - 1 ? `1px solid #E5E7EB` : "none" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                      <span style={{ backgroundColor: "#F3F4F6", color: COLORS.primaryText, width: "28px", height: "28px", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%", fontWeight: "bold", fontSize: "14px" }}>
-                        {index + 1}
-                      </span>
-                      <span style={{ fontSize: "16px", fontWeight: "700", color: COLORS.primaryText }}>{item.name}</span>
-                    </div>
-                    <div style={{ backgroundColor: "#ECFDF5", color: COLORS.success, padding: "6px 12px", borderRadius: "20px", fontWeight: "800", fontSize: "14px" }}>
-                      {item.qty} sold
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+          <h2 style={{ color: COLORS.primaryText, marginBottom: "20px", fontSize: "22px" }}>Operations</h2>
+          <div style={{ backgroundColor: COLORS.cardBg, padding: "25px", borderRadius: "16px", boxShadow: "0 4px 10px rgba(0,0,0,0.03)", border: "1px solid #E5E7EB", maxWidth: "400px" }}>
+            <div style={{ fontSize: "32px", marginBottom: "15px" }}>🌙</div>
+            <h3 style={{ margin: "0 0 10px 0", color: COLORS.primaryText, fontSize: "18px" }}>End of Day Reset</h3>
+            <p style={{ color: COLORS.secondaryText, fontSize: "14px", lineHeight: "1.5", marginBottom: "20px" }}>
+              Releases all table locks and clears alerts. Run this after closing.
+            </p>
+            <button onClick={endOfDayReset} disabled={isProcessing} style={{ width: "100%", padding: "14px", backgroundColor: "#1F2937", color: "white", border: "none", borderRadius: "8px", fontWeight: "bold", fontSize: "15px", cursor: isProcessing ? "not-allowed" : "pointer" }}>
+              {isProcessing ? "Processing..." : "Run End of Day Reset"}
+            </button>
           </div>
-        </div>
+        </>
       )}
 
       {activeTab === "history" && (
         <div>
-          {sortedDates.map(date => (
-            <div key={date} style={{ marginBottom: "40px" }}>
-              <h3 style={{ color: COLORS.primaryText, backgroundColor: "#E5E7EB", display: "inline-block", padding: "8px 16px", borderRadius: "8px", fontSize: "16px" }}>📅 {date}</h3>
-              <div style={{ backgroundColor: COLORS.white, borderRadius: "16px", padding: "20px", marginTop: "15px", overflowX: "auto", boxShadow: "0 4px 10px rgba(0,0,0,0.02)" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", minWidth: "700px" }}>
-                  <thead>
-                    <tr style={{ borderBottom: `2px solid #F3F4F6`, color: COLORS.secondaryText }}>
-                      <th style={{ padding: "15px 10px" }}>Time</th>
-                      <th style={{ padding: "15px 10px" }}>Table</th>
-                      <th style={{ padding: "15px 10px" }}>Status</th>
-                      <th style={{ padding: "15px 10px" }}>Rating</th>
-                      <th style={{ padding: "15px 10px", textAlign: "right" }}>Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {groupedOrders[date].map(order => {
-                      const rating = getRatingForOrder(order);
-                      return (
-                        <tr key={order.id} style={{ borderBottom: "1px solid #F3F4F6" }}>
-                          <td style={{ padding: "15px 10px", color: COLORS.primaryText, fontWeight: "600" }}>{order.dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
-                          <td style={{ padding: "15px 10px", color: COLORS.primaryText, fontWeight: "800" }}>Table {order.table_number}</td>
-                          <td style={{ padding: "15px 10px" }}>
-                            {/* UPDATED: Status badge now turns red for Rejected orders */}
-                            <span style={{ 
-                              backgroundColor: order.status === "paid" ? "#ECFDF5" : order.status === "rejected" ? "#FEF2F2" : "#FFFBEB", 
-                              color: order.status === "paid" ? "#059669" : order.status === "rejected" ? "#DC2626" : "#D97706", 
-                              padding: "6px 10px", borderRadius: "6px", fontSize: "12px", fontWeight: "700" 
-                            }}>
-                              {order.status.toUpperCase()}
-                            </span>
-                          </td>
-                          <td style={{ padding: "15px 10px", fontSize: "15px", color: rating !== "-" ? "#F59E0B" : COLORS.secondaryText, fontWeight: "bold" }}>
-                            {rating !== "-" ? `⭐ ${rating}` : "-"}
-                          </td>
-                          <td style={{ padding: "15px 10px", textAlign: "right", color: order.status === "rejected" ? COLORS.secondaryText : COLORS.success, fontWeight: "800", textDecoration: order.status === "rejected" ? "line-through" : "none" }}>
-                            ₹{order.total}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+          <p style={{ color: COLORS.secondaryText, marginBottom: "30px", fontSize: "16px" }}>
+            Download complete sales logs classified by month. These PDFs include full item breakdowns for every order.
+          </p>
+          
+          {isLoadingHistory ? (
+            <p>Loading historical data...</p>
+          ) : Object.keys(monthlyHistory).length === 0 ? (
+            <div style={{ padding: "40px", backgroundColor: COLORS.white, borderRadius: "12px", textAlign: "center", border: `1px dashed ${COLORS.border}` }}>
+              <p style={{ color: COLORS.secondaryText }}>No historical order data found.</p>
             </div>
-          ))}
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "20px" }}>
+              {/* Sort months descending (newest first) */}
+              {Object.values(monthlyHistory)
+                .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
+                .map((monthData, index) => (
+                <div key={index} style={{ backgroundColor: COLORS.white, borderRadius: "12px", padding: "25px", boxShadow: "0 4px 12px rgba(0,0,0,0.04)", border: `1px solid ${COLORS.border}`, display: "flex", flexDirection: "column" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "20px" }}>
+                    <div>
+                      <h3 style={{ margin: "0 0 5px 0", fontSize: "20px", color: COLORS.primaryText }}>{monthData.label}</h3>
+                      <span style={{ color: COLORS.secondaryText, fontSize: "14px", fontWeight: "500" }}>{monthData.orderCount} Total Orders</span>
+                    </div>
+                    <div style={{ fontSize: "28px" }}>📄</div>
+                  </div>
+                  
+                  <div style={{ marginBottom: "25px", paddingTop: "15px", borderTop: `1px dashed ${COLORS.border}` }}>
+                    <span style={{ display: "block", color: COLORS.secondaryText, fontSize: "13px", marginBottom: "5px" }}>Monthly Revenue</span>
+                    <strong style={{ fontSize: "24px", color: COLORS.success }}>₹{monthData.totalRevenue.toLocaleString()}</strong>
+                  </div>
+
+                  <button 
+                    onClick={() => downloadMonthPDF(monthData)}
+                    style={{ marginTop: "auto", width: "100%", padding: "14px", backgroundColor: "#4F46E5", color: "white", border: "none", borderRadius: "8px", fontWeight: "bold", fontSize: "15px", cursor: "pointer", display: "flex", justifyContent: "center", alignItems: "center", gap: "8px", transition: "0.2s" }}
+                    onMouseOver={(e) => e.target.style.backgroundColor = "#4338CA"}
+                    onMouseOut={(e) => e.target.style.backgroundColor = "#4F46E5"}
+                  >
+                    ⬇️ Download PDF Report
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
+
     </div>
   );
 }
