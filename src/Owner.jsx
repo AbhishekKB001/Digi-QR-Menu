@@ -42,8 +42,16 @@ export default function Owner() {
         const orderDateObj = data.created_at ? data.created_at.toDate() : new Date();
         
         if (data.status === "paid" && orderDateObj.toDateString() === todayString) {
-          revenue += (data.total_price || 0);
+          
+          // 🚨 THE FIX: Calculate total manually for old legacy orders
+          let orderTotal = data.total_price || 0;
+          if (orderTotal === 0 && data.items && Array.isArray(data.items)) {
+            orderTotal = data.items.reduce((sum, item) => sum + (item.price * item.qty), 0);
+          }
+
+          revenue += orderTotal;
           orderCount++;
+          
           if (data.items && Array.isArray(data.items)) {
             data.items.forEach(item => {
               if (itemCounts[item.name]) {
@@ -83,7 +91,13 @@ export default function Owner() {
             };
           }
 
-          historyByMonth[monthYear].totalRevenue += (data.total_price || 0);
+          // 🚨 THE FIX: Calculate total manually for old legacy orders in the PDF
+          let orderTotal = data.total_price || 0;
+          if (orderTotal === 0 && data.items && Array.isArray(data.items)) {
+            orderTotal = data.items.reduce((sum, item) => sum + (item.price * item.qty), 0);
+          }
+
+          historyByMonth[monthYear].totalRevenue += orderTotal;
           historyByMonth[monthYear].orderCount += 1;
           
           const itemsString = data.items.map(i => `${i.qty}x ${i.name}`).join(", ");
@@ -93,7 +107,7 @@ export default function Owner() {
             time: dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             table: data.table_number,
             items: itemsString,
-            total: data.total_price || 0
+            total: orderTotal // Now uses the fallback calculator!
           });
         }
       });
@@ -114,7 +128,6 @@ export default function Owner() {
     try {
       const doc = new jsPDF();
       
-      // Header
       doc.setFontSize(22);
       doc.setTextColor(40);
       doc.text("Mysuru Cafe - Sales Report", 14, 22);
@@ -124,7 +137,6 @@ export default function Owner() {
       doc.text(`Month: ${monthData.label}`, 14, 32);
       doc.text(`Total Orders: ${monthData.orderCount}  |  Total Revenue: Rs. ${monthData.totalRevenue.toLocaleString()}`, 14, 40);
 
-      // Table Data
       const tableColumn = ["Date", "Time", "Table", "Items Ordered", "Total (Rs)"];
       const tableRows = [];
 
@@ -138,7 +150,6 @@ export default function Owner() {
         ]);
       });
 
-      // Explicitly pass 'doc' to autoTable to fix React/Vite binding issues
       autoTable(doc, {
         startY: 48,
         head: [tableColumn],
@@ -149,7 +160,6 @@ export default function Owner() {
         columnStyles: { 3: { cellWidth: 80 } } 
       });
 
-      // Save File
       doc.save(`MysuruCafe_Report_${monthData.label.replace(" ", "_")}.pdf`);
       
     } catch (error) {
@@ -276,7 +286,6 @@ export default function Owner() {
             </div>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "20px" }}>
-              {/* Sort months descending (newest first) */}
               {Object.values(monthlyHistory)
                 .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
                 .map((monthData, index) => (
