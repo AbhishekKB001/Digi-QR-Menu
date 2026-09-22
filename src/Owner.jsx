@@ -70,9 +70,8 @@ export default function Owner() {
         const data = docSnap.data();
         if (data.status === "paid" && data.created_at) {
           const dateObj = data.created_at.toDate();
-          // Format: "September 2026"
           const monthYear = dateObj.toLocaleString('default', { month: 'long', year: 'numeric' });
-          const sortKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}`; // For sorting
+          const sortKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}`;
 
           if (!historyByMonth[monthYear]) {
             historyByMonth[monthYear] = { 
@@ -87,7 +86,6 @@ export default function Owner() {
           historyByMonth[monthYear].totalRevenue += (data.total_price || 0);
           historyByMonth[monthYear].orderCount += 1;
           
-          // Format items cleanly for the PDF
           const itemsString = data.items.map(i => `${i.qty}x ${i.name}`).join(", ");
           
           historyByMonth[monthYear].orders.push({
@@ -100,7 +98,6 @@ export default function Owner() {
         }
       });
 
-      // Sort orders within each month by date descending
       Object.values(historyByMonth).forEach(monthGroup => {
         monthGroup.orders.sort((a, b) => new Date(b.date) - new Date(a.date));
       });
@@ -141,7 +138,7 @@ export default function Owner() {
         ]);
       });
 
-      // 🚨 THE FIX: Use autoTable as a standalone function and pass 'doc' into it
+      // Explicitly pass 'doc' to autoTable to fix React/Vite binding issues
       autoTable(doc, {
         startY: 48,
         head: [tableColumn],
@@ -159,21 +156,6 @@ export default function Owner() {
       console.error("PDF Generation Error:", error);
       alert("Something went wrong while generating the PDF. Check the console.");
     }
-  };
-
-    // AutoTable Plugin
-    doc.autoTable({
-      startY: 48,
-      head: [tableColumn],
-      body: tableRows,
-      theme: 'grid',
-      headStyles: { fillColor: [15, 23, 42] },
-      styles: { fontSize: 10, cellPadding: 4 },
-      columnStyles: { 3: { cellWidth: 80 } } // Give more space to the items column
-    });
-
-    // Save File
-    doc.save(`MysuruCafe_Report_${monthData.label.replace(" ", "_")}.pdf`);
   };
 
   // --- SAFE END OF DAY RESET ---
