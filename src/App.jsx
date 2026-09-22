@@ -1,8 +1,7 @@
 import { signInWithEmailAndPassword, signInAnonymously, signOut, onAuthStateChanged } from "firebase/auth";
-import { auth } from "./firebase";
+import { auth, db } from "./firebase";
 import { useState, useEffect } from "react";
-import { collection, addDoc, serverTimestamp, query, where, onSnapshot, doc, getDoc } from "firebase/firestore";
-import { db } from "./firebase";
+import { collection, addDoc, serverTimestamp, query, where, onSnapshot, doc, getDoc, updateDoc } from "firebase/firestore";
 import Kitchen from "./Kitchen";
 import Owner from "./Owner";
 
@@ -66,10 +65,11 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isTableActive, setIsTableActive] = useState(false);
   const [isCheckingTable, setIsCheckingTable] = useState(true);
+  const [isLockedByOther, setIsLockedByOther] = useState(false); // 🚨 NEW LOCK STATE
   const [unlockRequested, setUnlockRequested] = useState(false);
 
   const [waiterCalled, setWaiterCalled] = useState(false);
-  const [billRequested, setBillRequested] = useState(false); // 🚨 Added state to track bill request
+  const [billRequested, setBillRequested] = useState(false);
   const [crowdStatus, setCrowdStatus] = useState({ text: "Low", time: "10 mins" });
   const [outOfStock, setOutOfStock] = useState([]);
   const [tableOrders, setTableOrders] = useState([]); 
@@ -79,10 +79,9 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
 
-useEffect(() => {
+  useEffect(() => {
     const urlCheck = new URL(window.location.href);
     if (urlCheck.searchParams.get("portal") !== "admin") {
-      // 🚨 ADDED ALERT HERE to catch anonymous login failures:
       signInAnonymously(auth).catch((error) => {
         alert("MOBILE ERROR (Auth): " + error.code + " | " + error.message);
         console.error(error);
@@ -131,11 +130,9 @@ useEffect(() => {
               window.history.replaceState({}, document.title, "/Digi-QR-Menu/");          
              }
           } else {
-             // 🚨 ADDED ALERT HERE for bad QR codes:
              alert("MOBILE ERROR: Invalid QR token or Table does not exist in DB.");
           }
         } catch (error) {
-          // 🚨 ADDED ALERT HERE to catch Firestore permission blocks:
           alert("MOBILE ERROR (Database): " + error.code + " | " + error.message);
           console.error("Security check failed:", error);
         }
@@ -149,12 +146,38 @@ useEffect(() => {
     return () => unsubscribe();
   }, []);
 
+  // 🚨 REPLACED TABLE CHECK EFFECT FOR DEVICE LOCK 🚨
   useEffect(() => {
-    if (!tableNumber || !isAuthReady) return; 
-
-    const unsubTable = onSnapshot(doc(db, "tables", tableNumber.toString()), (docSnap) => {
+    if (!tableNumber || !isAuthReady || !auth.currentUser) return; 
+  
+    const tableRef = doc(db, "tables", tableNumber.toString());
+  
+    const unsubTable = onSnapshot(tableRef, async (docSnap) => {
       if (docSnap.exists() && docSnap.data().is_active === true) {
-        setIsTableActive(true);
+        const data = docSnap.data();
+        const myUid = auth.currentUser.uid;
+  
+        // 1. Is another device already ordering?
+        if (data.locked_by && data.locked_by !== myUid) {
+          setIsLockedByOther(true);
+          setIsTableActive(false);
+        } 
+        // 2. Is the table open? Claim it!
+        else if (!data.locked_by) {
+          try {
+            await updateDoc(tableRef, { locked_by: myUid });
+            setIsLockedByOther(false);
+            setIsTableActive(true);
+          } catch (err) {
+            console.error("Failed to claim table lock:", err);
+          }
+        } 
+        // 3. This device already holds the lock
+        else {
+          setIsLockedByOther(false);
+          setIsTableActive(true);
+        }
+  
         setUnlockRequested(false); 
       } else {
         setIsTableActive(false);
@@ -232,7 +255,6 @@ useEffect(() => {
     setTimeout(() => setWaiterCalled(false), 5000); 
   };
 
-  // 🚨 NEW FEATURE: Request Bill Function
   const requestBill = async () => {
     try {
       setBillRequested(true);
@@ -283,20 +305,42 @@ useEffect(() => {
   const placeOrder = async () => {
     if (cart.length === 0 || isSubmitting) return; 
     setIsSubmitting(true);
+    
     try {
       const safeInstructions = sanitizeInput(cookingInstructions);
+      
       let mealSessionId = sessionStorage.getItem("meal_session_id");
       if (!mealSessionId) {
         mealSessionId = "session_" + Date.now().toString(36);
         sessionStorage.setItem("meal_session_id", mealSessionId);
       }
+  
+      const orderTotal = cart.reduce((total, item) => total + (item.price * item.qty), 0);
+  
       await addDoc(collection(db, "orders"), {
-        restaurant_id: "mysuru_cafe", table_number: parseInt(tableNumber), items: cart, special_instructions: safeInstructions, payment_method: "Pay at Counter", status: "pending", meal_session_id: mealSessionId, created_at: serverTimestamp()
+        customer_uid: auth.currentUser.uid,
+        total_price: orderTotal,
+        restaurant_id: "mysuru_cafe", 
+        table_number: parseInt(tableNumber), 
+        items: cart, 
+        special_instructions: safeInstructions, 
+        payment_method: "Pay at Counter", 
+        status: "pending", 
+        meal_session_id: mealSessionId, 
+        created_at: serverTimestamp()
       });
-      setOrderSent(true); setIsCartOpen(false); setCart([]); setCookingInstructions("");
+      
+      setOrderSent(true); 
+      setIsCartOpen(false); 
+      setCart([]); 
+      setCookingInstructions("");
+      
     } catch (error) { 
-      console.error(error); alert("Something went wrong. Please try again.");
-    } finally { setIsSubmitting(false); }
+      console.error(error); 
+      alert("Something went wrong. Please try again.");
+    } finally { 
+      setIsSubmitting(false); 
+    }
   };
 
   const handleLogin = async (e) => {
@@ -336,7 +380,20 @@ useEffect(() => {
   if (!tableNumber && view === "customer") {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", backgroundColor: COLORS.background, fontFamily: "'Inter', sans-serif" }}>
-        <h2 style={{ color: COLORS.primaryText, marginBottom: "10px", fontSize: "24px", fontWeight: "800" }}>🛜📱 Tap NFC Tag</h2>
+        <div className="premium-nfc-wrapper">
+          <div className="premium-nfc-card">
+            <h1 className="restaurant-title">Mysuru Cafe</h1>
+            <div className="icon-stage">
+              <div className="pulse-ring"></div>
+              <div className="pulse-ring delay"></div>
+              <div className="icon-circle">🛜📱</div>
+            </div>
+            <h2 className="nfc-heading">Tap NFC Tag</h2>
+            <p className="nfc-subtitle">Hold your phone near the NFC sticker on your table to view the menu.</p>
+            <div className="nfc-divider"></div>
+            <p className="nfc-fallback">Camera not picking it up? <br/>Scan the QR code instead.</p>
+          </div>
+        </div>
       </div>
     );
   }
@@ -345,31 +402,36 @@ useEffect(() => {
     return (
       <div className="premium-nfc-wrapper">
         <div className="premium-nfc-card">
-          
-          {/* Elegant Brand Header */}
           <h1 className="restaurant-title">Mysuru Cafe</h1>
-    
-          {/* Pulsing Emoji Graphic */}
           <div className="icon-stage">
             <div className="pulse-ring"></div>
             <div className="pulse-ring delay"></div>
             <div className="icon-circle">🛜📱</div>
           </div>
-    
-          {/* Clear, bold instructions */}
           <h2 className="nfc-heading">Connecting...</h2>
-          <p className="nfc-subtitle">
-            Connecting to Table {tableNumber}. Please hold your phone near the NFC sticker to view the menu.
-          </p>
-    
+          <p className="nfc-subtitle">Connecting to Table {tableNumber}. Please hold your phone near the NFC sticker to view the menu.</p>
           <div className="nfc-divider"></div>
-    
-          {/* Subtle fallback instruction */}
-          <p className="nfc-fallback">
-            Camera not picking it up? <br/>
-            Scan the QR code instead.
+          <p className="nfc-fallback">Camera not picking it up? <br/>Scan the QR code instead.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 🚨 NEW BLOCK SCREEN FOR SECONDARY USERS 🚨
+  if (isLockedByOther && view === "customer") {
+    return (
+      <div className="premium-nfc-wrapper">
+        <div className="premium-nfc-card">
+          <h1 className="restaurant-title">Mysuru Cafe</h1>
+          <div className="icon-circle" style={{ margin: "0 auto 1.5rem" }}>🔒</div>
+          <h2 className="nfc-heading">Table {tableNumber} is Active</h2>
+          <p className="nfc-subtitle">
+            Someone at your table has already started an order on their phone.
           </p>
-          
+          <div className="nfc-divider"></div>
+          <p className="nfc-fallback">
+            Please order together from the first phone to prevent duplicate orders.
+          </p>
         </div>
       </div>
     );
@@ -427,18 +489,12 @@ useEffect(() => {
  if (showBill) {
     return (
       <div style={{ background: "linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)", minHeight: "100vh", padding: "20px", fontFamily: "'Inter', sans-serif" }}>
-        
-        {/* Back Button */}
         <button onClick={() => setShowBill(false)} style={{ backgroundColor: "transparent", border: "none", fontSize: "24px", cursor: "pointer", color: COLORS.primaryText, marginBottom: "15px", fontWeight: "900" }}>←</button>
         
-        {/* Premium Dark Bill Card */}
         <div style={{ backgroundColor: "#1A1A1A", padding: "25px", borderRadius: "16px", boxShadow: "0 10px 25px rgba(0,0,0,0.15)", maxWidth: "400px", margin: "0 auto" }}>
-          
           <h2 style={{ color: "#FFFFFF", margin: "0 0 5px 0", fontWeight: "900", fontSize: "24px", letterSpacing: "-0.5px" }}>Mysore Cafe</h2>
           <p style={{ color: "#A3A3A3", margin: "0 0 20px 0", fontWeight: "600", fontSize: "14px" }}>Table {tableNumber} • Digital Receipt</p>
-          
           <hr style={{ borderTop: `1px dashed #404040`, marginBottom: "20px" }} />
-          
           <div style={{ textAlign: "left", marginBottom: "20px" }}>
             {tableOrders.map((order) => (
               <div key={order.id} style={{ marginBottom: "15px" }}>
@@ -459,13 +515,12 @@ useEffect(() => {
             <span style={{ color: COLORS.blinkitGreen }}>₹{calculateGrandTotal()}</span>
           </div>
           
-          {/* 🚨 THE NEW READY TO PAY BUTTON 🚨 */}
           <button 
             onClick={requestBill} 
             disabled={billRequested}
             style={{ 
               width: "100%", padding: "16px", 
-              backgroundColor: billRequested ? "#4B5563" : "#EA580C", // Turns grey when clicked
+              backgroundColor: billRequested ? "#4B5563" : "#EA580C",
               color: "white", border: "none", borderRadius: "12px", fontSize: "16px", 
               fontWeight: "bold", cursor: billRequested ? "not-allowed" : "pointer", 
               boxShadow: billRequested ? "none" : "0 4px 15px rgba(234, 88, 12, 0.3)",
@@ -473,7 +528,6 @@ useEffect(() => {
             }}>
             {billRequested ? "✓ Waiter Notified" : "🛎️ Ready to Pay (Call Waiter)"}
           </button>
-          
         </div>
       </div>
     );
@@ -486,14 +540,8 @@ useEffect(() => {
   });
 
   return (
-    <div style={{ 
-      background: "linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)", /* 🚨 Premium Silver Gradient */
-      minHeight: "100vh", 
-      paddingBottom: "100px", 
-      fontFamily: "'Inter', sans-serif" 
-    }}>
+    <div style={{ background: "linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)", minHeight: "100vh", paddingBottom: "100px", fontFamily: "'Inter', sans-serif" }}>
       
-      {/* 🚨 BLINKIT STYLE YELLOW HEADER */}
       <div style={{ backgroundColor: COLORS.blinkitYellow, padding: "20px 20px 15px 20px", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "15px" }}>
           <div>
@@ -508,7 +556,6 @@ useEffect(() => {
           </button>
         </div>
         
-        {/* BLINKIT STYLE SEARCH / TABS BAR */}
         <div className="hide-scroll" style={{ display: "flex", gap: "10px", overflowX: "auto" }}>
           {CATEGORIES.map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: "8px 16px", borderRadius: "8px", border: "none", fontSize: "14px", fontWeight: "700", cursor: "pointer", whiteSpace: "nowrap", backgroundColor: activeTab === tab ? COLORS.primaryText : "white", color: activeTab === tab ? "white" : COLORS.primaryText, transition: "0.1s" }}>
@@ -519,8 +566,6 @@ useEffect(() => {
       </div>
 
       <div style={{ maxWidth: "480px", margin: "0 auto", padding: "15px" }}>
-        
-        {/* Diet Filter Pills */}
         <div style={{ display: "flex", gap: "8px", marginBottom: "20px" }}>
           {["All", "Veg", "Non-Veg"].map(filter => (
             <button key={filter} onClick={() => setDietFilter(filter)} style={{ padding: "6px 14px", borderRadius: "6px", border: `1px solid ${dietFilter === filter ? COLORS.primaryText : COLORS.border}`, backgroundColor: dietFilter === filter ? "#E8E8E8" : "white", color: COLORS.primaryText, fontSize: "13px", fontWeight: "700", cursor: "pointer" }}>
@@ -529,7 +574,6 @@ useEffect(() => {
           ))}
         </div>
 
-        {/* Flat White Cards (Blinkit List Style) */}
         <div style={{ display: "flex", flexDirection: "column", gap: "12px", backgroundColor: "white", padding: "15px", borderRadius: "12px", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
           {filteredMenu.length === 0 ? (
             <div style={{ textAlign: "center", color: COLORS.secondaryText, padding: "20px", fontWeight: "600", fontSize: "14px" }}>No items found.</div>
@@ -571,7 +615,6 @@ useEffect(() => {
         </div>
       </div>
 
-      {/* 🚨 BLINKIT GREEN BOTTOM CART */}
       <div style={{ position: "fixed", bottom: 0, left: 0, width: "100%", zIndex: 100, backgroundColor: COLORS.background }}>
         <div style={{ maxWidth: "480px", margin: "0 auto", padding: "10px 15px 15px 15px" }}>
           {tableOrders.length > 0 && cart.length === 0 && (
@@ -594,7 +637,7 @@ useEffect(() => {
       {isCartOpen && (
         <div style={{ 
           position: "fixed", top: 0, left: 0, width: "100%", height: "100%", 
-          background: "linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)", /* 🚨 Matching Gradient */
+          background: "linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)",
           zIndex: 200, overflowY: "auto", paddingBottom: "120px" 
         }}>
           <div style={{ backgroundColor: "white", padding: "15px 20px", display: "flex", alignItems: "center", position: "sticky", top: 0, borderBottom: `1px solid ${COLORS.border}` }}>
@@ -626,19 +669,10 @@ useEffect(() => {
                 onChange={(e) => setCookingInstructions(e.target.value)} 
                 placeholder="Any cooking instructions? (e.g. less spicy)" 
                 style={{ 
-                  width: "100%", 
-                  boxSizing: "border-box", 
-                  padding: "16px", 
-                  borderRadius: "8px", 
-                  border: "1px solid #333333", // Dark border
-                  backgroundColor: "#1A1A1A", // Premium Dark Background
-                  color: "#FFFFFF",           // White text
-                  minHeight: "80px", 
-                  fontFamily: "inherit", 
-                  fontSize: "14px", 
-                  fontWeight: "500", 
-                  outline: "none", 
-                  resize: "none" 
+                  width: "100%", boxSizing: "border-box", padding: "16px", borderRadius: "8px", 
+                  border: "1px solid #333333", backgroundColor: "#1A1A1A", color: "#FFFFFF", 
+                  minHeight: "80px", fontFamily: "inherit", fontSize: "14px", fontWeight: "500", 
+                  outline: "none", resize: "none" 
                 }} 
               />
             </div>
@@ -649,7 +683,6 @@ useEffect(() => {
             </div>
           </div>
 
-          {/* 🚨 THE OVERFLOW FIX IS RIGHT HERE 🚨 */}
           <div style={{ position: "fixed", bottom: 0, left: 0, width: "100%", boxSizing: "border-box", backgroundColor: "white", padding: "15px", borderTop: `1px solid ${COLORS.border}` }}>
             <div style={{ maxWidth: "480px", margin: "0 auto", boxSizing: "border-box" }}>
               <button onClick={placeOrder} disabled={isSubmitting || cart.length === 0} style={{ width: "100%", boxSizing: "border-box", backgroundColor: COLORS.blinkitGreen, color: "white", padding: "16px", border: "none", borderRadius: "10px", fontSize: "16px", fontWeight: "800", cursor: "pointer" }}>

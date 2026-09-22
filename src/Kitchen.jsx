@@ -104,27 +104,31 @@ export default function Kitchen() {
     }
   };
 
+  // 🚨 ADDED { locked_by: null } TO CLEAR DEVICE LOCKS
   const openTable = async (tableNum) => {
     try {
-      await setDoc(doc(db, "tables", tableNum.toString()), { is_active: true });
+      await setDoc(doc(db, "tables", tableNum.toString()), { is_active: true, locked_by: null }, { merge: true });
     } catch(e) { alert("Failed to open table"); }
   };
 
+  // 🚨 ADDED { locked_by: null } TO CLEAR DEVICE LOCKS
   const lockTable = async (tableNum) => {
     try {
-      await setDoc(doc(db, "tables", tableNum.toString()), { is_active: false });
+      await setDoc(doc(db, "tables", tableNum.toString()), { is_active: false, locked_by: null }, { merge: true });
     } catch(e) { alert("Failed to lock table"); }
   };
 
+  // 🚨 ADDED { locked_by: null } TO CLEAR DEVICE LOCKS
   const approveAndUnlock = async (alertId, tableNum) => {
     try {
       const batch = writeBatch(db);
-      batch.set(doc(db, "tables", tableNum.toString()), { is_active: true });
+      batch.set(doc(db, "tables", tableNum.toString()), { is_active: true, locked_by: null }, { merge: true });
       batch.update(doc(db, "alerts", alertId), { status: "resolved" });
       await batch.commit();
     } catch (e) { alert("Action failed, please try again."); }
   };
 
+  // 🚨 ADDED { locked_by: null } TO CLEAR DEVICE LOCKS UPON SETTLING
   const settleBill = async (tableNumber) => {
     const batch = writeBatch(db);
     unpaidOrders.forEach((order) => {
@@ -137,7 +141,10 @@ export default function Kitchen() {
         batch.update(doc(db, "alerts", alert.id), { status: "resolved" });
       }
     });
-    batch.set(doc(db, "tables", tableNumber.toString()), { is_active: false });
+    
+    // Clear lock when the bill is settled
+    batch.set(doc(db, "tables", tableNumber.toString()), { is_active: false, locked_by: null }, { merge: true });
+    
     await batch.commit(); 
   };
 
@@ -218,8 +225,10 @@ export default function Kitchen() {
         }
       }
       pendingIds.forEach((id) => batch.update(doc(db, "orders", id), { status: "rejected" }));
+      
+      // 🚨 ADDED { locked_by: null } HERE AS WELL
       if (tableToLock) {
-        batch.update(doc(db, "tables", tableToLock.toString()), { is_active: false });
+        batch.set(doc(db, "tables", tableToLock.toString()), { is_active: false, locked_by: null }, { merge: true });
       }
       await batch.commit();
     }
@@ -260,22 +269,18 @@ export default function Kitchen() {
     return { text: "Locked", bg: COLORS.white, color: COLORS.secondaryText, border: "#E5E7EB" };
   };
 
-  // 🚨 NEW LOGIC: Separate Unverified Orders (Pending) from Cooking Orders (Preparing)
   const groupedPending = {};
   const groupedPreparing = {};
 
   activeOrders.forEach(order => {
     const t = order.table_number;
     
-    // Group 1: Items waiting for approval
     if (order.status === "pending") {
       if (!groupedPending[t]) groupedPending[t] = { table_number: t, pendingIds: [], items: [], notes: [] };
       groupedPending[t].pendingIds.push(order.id);
       order.items.forEach(item => groupedPending[t].items.push(item));
       if (order.special_instructions) groupedPending[t].notes.push(order.special_instructions);
     } 
-    
-    // Group 2: Items actively cooking
     else if (order.status === "preparing") {
       if (!groupedPreparing[t]) groupedPreparing[t] = { table_number: t, allIds: [], items: [], notes: [] };
       groupedPreparing[t].allIds.push(order.id);
@@ -390,7 +395,6 @@ export default function Kitchen() {
             })}
           </div>
 
-          {/* 🚨 ZONE 1: VERIFICATION INBOX */}
           {approvalQueue.length > 0 && (
             <div style={{ marginBottom: "40px", padding: "20px", backgroundColor: "#FFFBEB", borderRadius: "16px", border: "2px dashed #F59E0B" }}>
               <h2 style={{ color: "#D97706", margin: "0 0 20px 0", fontSize: "20px" }}>⚠️ New Orders Pending Verification</h2>
@@ -427,7 +431,6 @@ export default function Kitchen() {
             </div>
           )}
 
-          {/* 🚨 ZONE 2: ACTIVE KITCHEN DISPATCH (COOKING) */}
           <h2 style={{ color: COLORS.primaryText, marginBottom: "20px", fontSize: "20px" }}>Kitchen Dispatch Queue (Cooking)</h2>
           <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
             {dispatchQueue.length === 0 ? (
