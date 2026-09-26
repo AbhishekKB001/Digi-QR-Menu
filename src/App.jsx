@@ -33,15 +33,9 @@ const MENU_ITEMS = [
 
 const CATEGORIES = ["Starters", "Breads", "Rice Dishes", "Main Course", "Desserts", "Beverages"];
 
-// 🚨 BLINKIT COLOR PALETTE
 const COLORS = {
-  background: "#F4F6F9",     // Light gray background
-  primaryText: "#1C1C1C",    // Deep contrast black
-  secondaryText: "#666666",  // Clear gray
-  blinkitYellow: "#F8CB46",  // The iconic yellow
-  blinkitGreen: "#0C831F",   // The iconic green
-  white: "#FFFFFF", 
-  border: "#E8E8E8"
+  background: "#F4F6F9", primaryText: "#1C1C1C", secondaryText: "#666666",
+  blinkitYellow: "#F8CB46", blinkitGreen: "#0C831F", white: "#FFFFFF", border: "#E8E8E8"
 };
 
 const DietBadge = ({ isVeg }) => (
@@ -56,7 +50,10 @@ export default function App() {
   const [dietFilter, setDietFilter] = useState("All"); 
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [showBill, setShowBill] = useState(false); 
+  
+  // 🚨 CART IS NOW EMPTY BY DEFAULT - IT SYNC FROM FIREBASE
   const [cart, setCart] = useState([]);
+
   const [cookingInstructions, setCookingInstructions] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [orderSent, setOrderSent] = useState(false);
@@ -65,12 +62,11 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isTableActive, setIsTableActive] = useState(false);
   const [isCheckingTable, setIsCheckingTable] = useState(true);
-  const [isLockedByOther, setIsLockedByOther] = useState(false); // 🚨 NEW LOCK STATE
-  const [unlockRequested, setUnlockRequested] = useState(false);
-
+  const [isLockedByOther, setIsLockedByOther] = useState(false); 
+  
+  const [hasScannedToken, setHasScannedToken] = useState(false);
   const [waiterCalled, setWaiterCalled] = useState(false);
   const [billRequested, setBillRequested] = useState(false);
-  const [crowdStatus, setCrowdStatus] = useState({ text: "Low", time: "10 mins" });
   const [outOfStock, setOutOfStock] = useState([]);
   const [tableOrders, setTableOrders] = useState([]); 
   const [showFeedback, setShowFeedback] = useState(false);
@@ -84,7 +80,6 @@ export default function App() {
     if (urlCheck.searchParams.get("portal") !== "admin") {
       signInAnonymously(auth).catch((error) => {
         alert("MOBILE ERROR (Auth): " + error.code + " | " + error.message);
-        console.error(error);
       });
     }
 
@@ -92,9 +87,7 @@ export default function App() {
       if (user) {
         setIsAuthReady(true);
         const url = new URL(window.location.href);
-        const isPortal = url.searchParams.get("portal") === "admin";
-        
-        if (isPortal) {
+        if (url.searchParams.get("portal") === "admin") {
           if (user.email === "owner@mysurucafe.com") setView("owner");
           else if (user.email === "kitchen@mysurucafe.com") setView("kitchen");
         }
@@ -120,13 +113,16 @@ export default function App() {
           if (docSnap.exists() && docSnap.data().restaurant_id === "mysuru_cafe") {
             const data = docSnap.data();
             if (data.table_number) {
-              const oldTable = sessionStorage.getItem("customer_table_session");
+              
+              setHasScannedToken(true); 
+
+              const oldTable = localStorage.getItem("customer_table_session");
               if (oldTable && parseInt(oldTable) !== data.table_number) {
-                 sessionStorage.removeItem("meal_session_id");
-                 sessionStorage.removeItem("cart"); 
+                 localStorage.removeItem("meal_session_id");
               }
-              sessionStorage.setItem("customer_table_session", data.table_number);
+              localStorage.setItem("customer_table_session", data.table_number);
               setTableNumber(data.table_number); 
+              
               window.history.replaceState({}, document.title, "/Digi-QR-Menu/");          
              }
           } else {
@@ -134,10 +130,9 @@ export default function App() {
           }
         } catch (error) {
           alert("MOBILE ERROR (Database): " + error.code + " | " + error.message);
-          console.error("Security check failed:", error);
         }
       } else {
-        const existingSession = sessionStorage.getItem("customer_table_session");
+        const existingSession = localStorage.getItem("customer_table_session");
         if (existingSession) setTableNumber(existingSession);
       }
     };
@@ -146,7 +141,6 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 🚨 REPLACED TABLE CHECK EFFECT FOR DEVICE LOCK 🚨
   useEffect(() => {
     if (!tableNumber || !isAuthReady || !auth.currentUser) return; 
   
@@ -156,57 +150,59 @@ export default function App() {
       if (docSnap.exists() && docSnap.data().is_active === true) {
         const data = docSnap.data();
         const myUid = auth.currentUser.uid;
-  
-        // 1. Is another device already ordering?
-        if (data.locked_by && data.locked_by !== myUid) {
-          setIsLockedByOther(true);
-          setIsTableActive(false);
-        } 
-        // 2. Is the table open? Claim it!
-        else if (!data.locked_by) {
-          try {
-            await updateDoc(tableRef, { locked_by: myUid });
-            setIsLockedByOther(false);
-            setIsTableActive(true);
-          } catch (err) {
-            console.error("Failed to claim table lock:", err);
+        
+        // 🚨 SYNC CART FROM THE CLOUD TABLE SO BOTH PHONES SEE IT
+        setCart(data.shared_cart || []);
+
+        if (hasScannedToken) {
+          if (data.locked_by !== myUid) {
+            try { await updateDoc(tableRef, { locked_by: myUid }); } catch (err) {}
           }
-        } 
-        // 3. This device already holds the lock
-        else {
           setIsLockedByOther(false);
           setIsTableActive(true);
+          setHasScannedToken(false);
+        } 
+        else {
+          if (data.locked_by && data.locked_by !== myUid) {
+            setIsLockedByOther(true);
+            setIsTableActive(false);
+          } 
+          else if (!data.locked_by) {
+            try { await updateDoc(tableRef, { locked_by: myUid }); } catch (err) {}
+            setIsLockedByOther(false);
+            setIsTableActive(true);
+          } 
+          else {
+            setIsLockedByOther(false);
+            setIsTableActive(true);
+          }
         }
-  
-        setUnlockRequested(false); 
+
       } else {
         setIsTableActive(false);
+        setCart([]); // Clear cart if table is locked by kitchen
       }
       setIsCheckingTable(false);
     });
     
     return () => unsubTable();
-  }, [tableNumber, isAuthReady]);
+  }, [tableNumber, isAuthReady, hasScannedToken]);
 
   useEffect(() => {
     if (!tableNumber || !isAuthReady) return;
 
     const qOrders = query(collection(db, "orders"), where("restaurant_id", "==", "mysuru_cafe"));
     const unsubOrders = onSnapshot(qOrders, (snapshot) => {
-      let activeCount = 0;
       const myTableOrders = [];
       const todayString = new Date().toDateString();
 
       snapshot.forEach((doc) => {
         const data = doc.data();
-        if (data.status === "pending" || data.status === "preparing") activeCount++;
-        
         const orderDateObj = data.created_at ? data.created_at.toDate() : new Date();
 
-        if (data.status === "rejected" && data.meal_session_id === sessionStorage.getItem("meal_session_id")) {
-          sessionStorage.removeItem("customer_table_session");
-          sessionStorage.removeItem("meal_session_id");
-          sessionStorage.removeItem("cart");
+        if (data.status === "rejected" && data.meal_session_id === localStorage.getItem("meal_session_id")) {
+          localStorage.removeItem("customer_table_session");
+          localStorage.removeItem("meal_session_id");
           window.location.href = "/Digi-QR-Menu/";
         }
 
@@ -216,9 +212,6 @@ export default function App() {
       });
 
       setTableOrders(myTableOrders);
-      if (activeCount <= 2) setCrowdStatus({ text: "Low", time: "10 mins" }); 
-      else if (activeCount <= 5) setCrowdStatus({ text: "Moderate", time: "20 mins" }); 
-      else setCrowdStatus({ text: "High", time: "35 mins" }); 
     });
 
     const unsubMenu = onSnapshot(doc(db, "settings", "mysuru_cafe"), (docSnap) => {
@@ -239,13 +232,19 @@ export default function App() {
     }
   }, [tableOrders, showBill]);
 
-  const requestUnlock = async () => {
-    try {
-      setUnlockRequested(true); 
-      await addDoc(collection(db, "alerts"), { restaurant_id: "mysuru_cafe", table_number: parseInt(tableNumber), type: "unlock_request", status: "active", created_at: serverTimestamp() });
-    } catch (error) {
-      alert("Network error. Please try again.");
-      setUnlockRequested(false);
+  const releaseMyLock = async () => {
+    const confirmRelease = window.confirm("Are you sure you want to release the menu? You will have to scan the QR code again to order.");
+    if (confirmRelease) {
+      try {
+        await updateDoc(doc(db, "tables", tableNumber.toString()), { 
+          locked_by: null,
+          shared_cart: [] // Clear the table's cart when they leave
+        });
+        localStorage.removeItem("customer_table_session");
+        window.location.href = "/Digi-QR-Menu/";
+      } catch (err) {
+        alert("Failed to release table.");
+      }
     }
   };
 
@@ -258,16 +257,9 @@ export default function App() {
   const requestBill = async () => {
     try {
       setBillRequested(true);
-      await addDoc(collection(db, "alerts"), {
-        restaurant_id: "mysuru_cafe",
-        table_number: parseInt(tableNumber),
-        type: "bill",
-        status: "active",
-        created_at: serverTimestamp()
-      });
+      await addDoc(collection(db, "alerts"), { restaurant_id: "mysuru_cafe", table_number: parseInt(tableNumber), type: "bill", status: "active", created_at: serverTimestamp() });
       alert("We are fetching your bill! A waiter will be there shortly. 🛎️");
     } catch (error) {
-      console.error("Failed to request bill:", error);
       setBillRequested(false);
     }
   };
@@ -275,27 +267,24 @@ export default function App() {
   const submitFeedback = async (rating) => {
     await addDoc(collection(db, "feedbacks"), { restaurant_id: "mysuru_cafe", table_number: parseInt(tableNumber), rating: rating, created_at: serverTimestamp() });
     setFeedbackSubmitted(true);
-    sessionStorage.removeItem("customer_table_session");
-    sessionStorage.removeItem("meal_session_id");
-    sessionStorage.removeItem("cart");
+    localStorage.removeItem("customer_table_session");
+    localStorage.removeItem("meal_session_id");
     setTimeout(() => { window.location.href = "/Digi-QR-Menu/"; }, 3000);
   };
 
-  const addToCart = (item) => {
-    setCart(prev => {
-      const existing = prev.find(c => c.id === item.id);
-      return existing ? prev.map(c => c.id === item.id ? { ...c, qty: c.qty + 1 } : c) : [...prev, { ...item, qty: 1 }];
-    });
+  // 🚨 CART ACTIONS NOW SAVE DIRECTLY TO CLOUD 🚨
+  const addToCart = async (item) => {
+    if(!tableNumber) return;
+    const existing = cart.find(c => c.id === item.id);
+    const newCart = existing ? cart.map(c => c.id === item.id ? { ...c, qty: c.qty + 1 } : c) : [...cart, { ...item, qty: 1 }];
+    await updateDoc(doc(db, "tables", tableNumber.toString()), { shared_cart: newCart });
   };
 
-  const removeFromCart = (id) => {
-    setCart(prev => {
-      const existing = prev.find(c => c.id === id);
-      if (existing.qty > 1) return prev.map(c => c.id === id ? { ...c, qty: c.qty - 1 } : c);
-      const newCart = prev.filter(item => item.id !== id);
-      if (newCart.length === 0) setIsCartOpen(false);
-      return newCart;
-    });
+  const removeFromCart = async (id) => {
+    if(!tableNumber) return;
+    const existing = cart.find(c => c.id === id);
+    const newCart = existing.qty > 1 ? cart.map(c => c.id === id ? { ...c, qty: c.qty - 1 } : c) : cart.filter(item => item.id !== id);
+    await updateDoc(doc(db, "tables", tableNumber.toString()), { shared_cart: newCart });
   };
   
   const calculateCartTotal = () => cart.reduce((total, item) => total + (item.price * item.qty), 0);
@@ -308,13 +297,11 @@ export default function App() {
     
     try {
       const safeInstructions = sanitizeInput(cookingInstructions);
-      
-      let mealSessionId = sessionStorage.getItem("meal_session_id");
+      let mealSessionId = localStorage.getItem("meal_session_id");
       if (!mealSessionId) {
         mealSessionId = "session_" + Date.now().toString(36);
-        sessionStorage.setItem("meal_session_id", mealSessionId);
+        localStorage.setItem("meal_session_id", mealSessionId);
       }
-  
       const orderTotal = cart.reduce((total, item) => total + (item.price * item.qty), 0);
   
       await addDoc(collection(db, "orders"), {
@@ -330,13 +317,14 @@ export default function App() {
         created_at: serverTimestamp()
       });
       
+      // Clear the cloud cart for everyone at the table after ordering
+      await updateDoc(doc(db, "tables", tableNumber.toString()), { shared_cart: [] });
+
       setOrderSent(true); 
       setIsCartOpen(false); 
-      setCart([]); 
       setCookingInstructions("");
       
     } catch (error) { 
-      console.error(error); 
       alert("Something went wrong. Please try again.");
     } finally { 
       setIsSubmitting(false); 
@@ -351,7 +339,6 @@ export default function App() {
       if (userCredential.user.email === "owner@mysurucafe.com") setView("owner");
       else if (userCredential.user.email === "kitchen@mysurucafe.com") setView("kitchen");
     } catch (error) {
-      console.error("FIREBASE ERROR:", error.code, error.message);
       setLoginError("Invalid credentials.");
     } finally { setIsSubmitting(false); }
   };
@@ -417,20 +404,21 @@ export default function App() {
     );
   }
 
-  // 🚨 NEW BLOCK SCREEN FOR SECONDARY USERS 🚨
+  // 🚨 THE NEW INACTIVE SCREEN 🚨
   if (isLockedByOther && view === "customer") {
     return (
       <div className="premium-nfc-wrapper">
-        <div className="premium-nfc-card">
+        <div className="premium-nfc-card" style={{ paddingBottom: "25px" }}>
           <h1 className="restaurant-title">Mysuru Cafe</h1>
-          <div className="icon-circle" style={{ margin: "0 auto 1.5rem" }}>🔒</div>
-          <h2 className="nfc-heading">Table {tableNumber} is Active</h2>
+          <div className="icon-circle" style={{ margin: "0 auto 1.5rem" }}>🔄</div>
+          <h2 className="nfc-heading">Menu is with a Friend</h2>
           <p className="nfc-subtitle">
-            Someone at your table has already started an order on their phone.
+            Another phone at your table has taken control of the menu to place an order.
           </p>
           <div className="nfc-divider"></div>
-          <p className="nfc-fallback">
-            Please order together from the first phone to prevent duplicate orders.
+          <p className="nfc-fallback" style={{ marginBottom: "10px" }}>
+            <strong>Want to order instead?</strong><br/>
+            Simply tap your phone on the NFC tag again to take the menu back!
           </p>
         </div>
       </div>
@@ -463,13 +451,7 @@ export default function App() {
     return (
       <div style={{ minHeight: "100vh", backgroundColor: COLORS.background, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "30px", textAlign: "center", fontFamily: "'Inter', sans-serif" }}>
         <h1 style={{ color: COLORS.primaryText, fontSize: "24px", margin: "0 0 10px 0", fontWeight: "900" }}>Table Locked</h1>
-        {unlockRequested ? (
-          <div style={{ padding: "15px", marginTop: "15px", color: COLORS.blinkitGreen, fontWeight: "700" }}>Request Sent! Waiter is coming.</div>
-        ) : (
-          <button onClick={requestUnlock} style={{ marginTop: "20px", padding: "16px 30px", backgroundColor: COLORS.blinkitGreen, color: "white", border: "none", borderRadius: "8px", fontSize: "16px", fontWeight: "800", cursor: "pointer" }}>
-            Request Menu Access
-          </button>
-        )}
+        <p style={{ color: COLORS.secondaryText }}>This table is currently locked by staff.</p>
       </div>
     );
   }
@@ -551,9 +533,14 @@ export default function App() {
               <span style={{ fontSize: "14px", color: COLORS.primaryText, fontWeight: "700" }}>Table {tableNumber}</span>
             </div>
           </div>
-          <button onClick={callWaiter} disabled={waiterCalled} style={{ backgroundColor: "white", color: COLORS.primaryText, border: "none", padding: "8px 12px", borderRadius: "8px", fontSize: "13px", fontWeight: "800", cursor: "pointer", boxShadow: "0 2px 4px rgba(0,0,0,0.05)" }}>
-            {waiterCalled ? "✓ Waiter Notified" : "Call Waiter"}
-          </button>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button onClick={callWaiter} disabled={waiterCalled} style={{ backgroundColor: "white", color: COLORS.primaryText, border: "none", padding: "8px 12px", borderRadius: "8px", fontSize: "12px", fontWeight: "800", cursor: "pointer", boxShadow: "0 2px 4px rgba(0,0,0,0.05)" }}>
+              {waiterCalled ? "✓ Waiter Notified" : "Call Waiter"}
+            </button>
+            <button onClick={releaseMyLock} style={{ backgroundColor: "#1C1C1C", color: "white", border: "none", padding: "8px 12px", borderRadius: "8px", fontSize: "12px", fontWeight: "800", cursor: "pointer", boxShadow: "0 2px 4px rgba(0,0,0,0.05)" }}>
+              🚪 Leave Table
+            </button>
+          </div>
         </div>
         
         <div className="hide-scroll" style={{ display: "flex", gap: "10px", overflowX: "auto" }}>
@@ -566,6 +553,11 @@ export default function App() {
       </div>
 
       <div style={{ maxWidth: "480px", margin: "0 auto", padding: "15px" }}>
+        
+        <div style={{ backgroundColor: "#FEF2F2", border: "1px solid #FCA5A5", padding: "10px", borderRadius: "8px", marginBottom: "15px", fontSize: "12px", color: "#DC2626", textAlign: "center", fontWeight: "600" }}>
+          ⚠️ Do not close your browser until you are finished ordering.
+        </div>
+
         <div style={{ display: "flex", gap: "8px", marginBottom: "20px" }}>
           {["All", "Veg", "Non-Veg"].map(filter => (
             <button key={filter} onClick={() => setDietFilter(filter)} style={{ padding: "6px 14px", borderRadius: "6px", border: `1px solid ${dietFilter === filter ? COLORS.primaryText : COLORS.border}`, backgroundColor: dietFilter === filter ? "#E8E8E8" : "white", color: COLORS.primaryText, fontSize: "13px", fontWeight: "700", cursor: "pointer" }}>
