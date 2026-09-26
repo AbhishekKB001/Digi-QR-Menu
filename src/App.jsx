@@ -51,7 +51,6 @@ export default function App() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [showBill, setShowBill] = useState(false); 
   
-  // 🚨 CART IS NOW EMPTY BY DEFAULT - IT SYNC FROM FIREBASE
   const [cart, setCart] = useState([]);
 
   const [cookingInstructions, setCookingInstructions] = useState("");
@@ -151,7 +150,6 @@ export default function App() {
         const data = docSnap.data();
         const myUid = auth.currentUser.uid;
         
-        // 🚨 SYNC CART FROM THE CLOUD TABLE SO BOTH PHONES SEE IT
         setCart(data.shared_cart || []);
 
         if (hasScannedToken) {
@@ -180,7 +178,7 @@ export default function App() {
 
       } else {
         setIsTableActive(false);
-        setCart([]); // Clear cart if table is locked by kitchen
+        setCart([]);
       }
       setIsCheckingTable(false);
     });
@@ -238,7 +236,7 @@ export default function App() {
       try {
         await updateDoc(doc(db, "tables", tableNumber.toString()), { 
           locked_by: null,
-          shared_cart: [] // Clear the table's cart when they leave
+          shared_cart: []
         });
         localStorage.removeItem("customer_table_session");
         window.location.href = "/Digi-QR-Menu/";
@@ -272,7 +270,6 @@ export default function App() {
     setTimeout(() => { window.location.href = "/Digi-QR-Menu/"; }, 3000);
   };
 
-  // 🚨 CART ACTIONS NOW SAVE DIRECTLY TO CLOUD 🚨
   const addToCart = async (item) => {
     if(!tableNumber) return;
     const existing = cart.find(c => c.id === item.id);
@@ -317,7 +314,6 @@ export default function App() {
         created_at: serverTimestamp()
       });
       
-      // Clear the cloud cart for everyone at the table after ordering
       await updateDoc(doc(db, "tables", tableNumber.toString()), { shared_cart: [] });
 
       setOrderSent(true); 
@@ -404,7 +400,6 @@ export default function App() {
     );
   }
 
-  // 🚨 THE NEW INACTIVE SCREEN 🚨
   if (isLockedByOther && view === "customer") {
     return (
       <div className="premium-nfc-wrapper">
@@ -416,10 +411,24 @@ export default function App() {
             Another phone at your table has taken control of the menu to place an order.
           </p>
           <div className="nfc-divider"></div>
-          <p className="nfc-fallback" style={{ marginBottom: "10px" }}>
+          <p className="nfc-fallback" style={{ marginBottom: "15px" }}>
             <strong>Want to order instead?</strong><br/>
-            Simply tap your phone on the NFC tag again to take the menu back!
+            Tap the NFC tag again, or click below to take the menu back!
           </p>
+          <button 
+            onClick={async () => {
+              try {
+                await updateDoc(doc(db, "tables", tableNumber.toString()), { 
+                  locked_by: auth.currentUser.uid 
+                });
+              } catch(e) {
+                alert("Could not take over table.");
+              }
+            }} 
+            style={{ width: "100%", padding: "14px", backgroundColor: COLORS.blinkitGreen, color: "white", border: "none", borderRadius: "8px", fontSize: "15px", fontWeight: "800", cursor: "pointer", boxShadow: "0 4px 10px rgba(12, 131, 31, 0.2)" }}
+          >
+            🔄 Take Menu Back
+          </button>
         </div>
       </div>
     );
