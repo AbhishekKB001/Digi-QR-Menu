@@ -400,6 +400,7 @@ export default function App() {
     );
   }
 
+  // 🚨 THE NEW INACTIVE SCREEN WITH THE TAKE BACK BUTTON 🚨
   if (isLockedByOther && view === "customer") {
     return (
       <div className="premium-nfc-wrapper">
@@ -418,6 +419,7 @@ export default function App() {
           <button 
             onClick={async () => {
               try {
+                // Instantly steal the lock back without scanning!
                 await updateDoc(doc(db, "tables", tableNumber.toString()), { 
                   locked_by: auth.currentUser.uid 
                 });
