@@ -400,7 +400,6 @@ export default function App() {
     );
   }
 
-  // 🚨 THE NEW INACTIVE SCREEN WITH THE TAKE BACK BUTTON 🚨
   if (isLockedByOther && view === "customer") {
     return (
       <div className="premium-nfc-wrapper">
@@ -419,7 +418,6 @@ export default function App() {
           <button 
             onClick={async () => {
               try {
-                // Instantly steal the lock back without scanning!
                 await updateDoc(doc(db, "tables", tableNumber.toString()), { 
                   locked_by: auth.currentUser.uid 
                 });
@@ -533,7 +531,7 @@ export default function App() {
   });
 
   return (
-    <div style={{ background: "linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)", minHeight: "100vh", paddingBottom: "100px", fontFamily: "'Inter', sans-serif" }}>
+    <div style={{ background: "linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)", minHeight: "100vh", paddingBottom: "140px", fontFamily: "'Inter', sans-serif" }}>
       
       <div style={{ backgroundColor: COLORS.blinkitYellow, padding: "20px 20px 15px 20px", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "15px" }}>
@@ -618,22 +616,27 @@ export default function App() {
         </div>
       </div>
 
-      <div style={{ position: "fixed", bottom: 0, left: 0, width: "100%", zIndex: 100, backgroundColor: COLORS.background }}>
-        <div style={{ maxWidth: "480px", margin: "0 auto", padding: "10px 15px 15px 15px" }}>
-          {tableOrders.length > 0 && cart.length === 0 && (
-            <button onClick={() => setShowBill(true)} style={{ width: "100%", backgroundColor: COLORS.primaryText, color: "white", padding: "16px", border: "none", borderRadius: "10px", fontSize: "15px", fontWeight: "800", cursor: "pointer" }}>
-              View Bill (₹{calculateGrandTotal()})
+      {/* 🚨 THE REDESIGNED DUAL-STACK BOTTOM BAR 🚨 */}
+      <div style={{ position: "fixed", bottom: 0, left: 0, width: "100%", zIndex: 100, backgroundColor: COLORS.background, borderTop: `1px solid ${COLORS.border}`, boxShadow: "0 -4px 15px rgba(0,0,0,0.03)" }}>
+        <div style={{ maxWidth: "480px", margin: "0 auto", padding: "10px 15px 15px 15px", display: "flex", flexDirection: "column", gap: "10px" }}>
+          
+          {tableOrders.length > 0 && (
+            <button onClick={() => setShowBill(true)} style={{ width: "100%", backgroundColor: COLORS.white, color: COLORS.primaryText, border: `1px solid ${COLORS.primaryText}`, padding: "14px", borderRadius: "10px", fontSize: "15px", fontWeight: "800", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>🧾 <span>View Placed Orders</span></span>
+              <span>Bill: ₹{calculateGrandTotal()}</span>
             </button>
           )}
+
           {cart.length > 0 && (
-            <button onClick={() => setIsCartOpen(true)} style={{ width: "100%", backgroundColor: COLORS.blinkitGreen, color: "white", padding: "16px 20px", border: "none", borderRadius: "10px", fontSize: "15px", fontWeight: "800", display: "flex", justifyContent: "space-between", cursor: "pointer" }}>
+            <button onClick={() => setIsCartOpen(true)} style={{ width: "100%", backgroundColor: COLORS.blinkitGreen, color: "white", padding: "14px 20px", border: "none", borderRadius: "10px", fontSize: "15px", fontWeight: "800", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", boxShadow: "0 4px 10px rgba(12,131,31,0.2)" }}>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
-                <span style={{ fontSize: "13px", fontWeight: "600", opacity: 0.9 }}>{cart.reduce((total, item) => total + item.qty, 0)} items</span>
-                <span>₹{calculateCartTotal()}</span>
+                <span style={{ fontSize: "12px", fontWeight: "600", opacity: 0.9, textTransform: "uppercase", letterSpacing: "0.5px" }}>{cart.reduce((total, item) => total + item.qty, 0)} Items Added</span>
+                <span style={{ fontSize: "16px" }}>₹{calculateCartTotal()}</span>
               </div>
-              <span style={{ display: "flex", alignItems: "center", gap: "5px" }}>View Cart <span>▶</span></span>
+              <span style={{ display: "flex", alignItems: "center", gap: "5px" }}>Review Cart <span>▶</span></span>
             </button>
           )}
+          
         </div>
       </div>
 
